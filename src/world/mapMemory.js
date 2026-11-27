@@ -42,6 +42,8 @@ export function createMapMemory(radius) {
   /** Indices currently VISIBLE, so the next observe can demote them. */
   let visible = [];
   let knownCount = 0;
+  /** Sight radius of the last observe (null before the first). */
+  let sight = null;
 
   const inMap = (h) => !!h && Number.isInteger(h.q) && Number.isInteger(h.r) && hexDistance(h, ORIGIN) <= radius;
   const indexOf = (h) => (h.r + radius) * span + (h.q + radius);
@@ -71,6 +73,7 @@ export function createMapMemory(radius) {
     observe(center, sightRadius = SIGHT_RADIUS) {
       for (const i of visible) state[i] = FOG.REMEMBERED;
       visible = [];
+      sight = Math.max(0, sightRadius);
       const newly = [];
       for (const h of hexesInRange(center, Math.max(0, sightRadius))) {
         if (!inMap(h)) continue;
@@ -80,6 +83,28 @@ export function createMapMemory(radius) {
         visible.push(i);
       }
       return { revealed: newly.length, newly };
+    },
+
+    /** The sight radius of the last `observe` or `showSight` (null before either). Saved with the game (Task 13). */
+    get sight() { return sight; },
+
+    /**
+     * Restore what is in sight after loading (Task 13): known hexes within
+     * `sightRadius` of `center` become VISIBLE, everything else visible
+     * becomes REMEMBERED. Unlike `observe`, nothing new is mapped, so a
+     * reload never reveals land or discovers places.
+     */
+    showSight(center, sightRadius) {
+      for (const i of visible) state[i] = FOG.REMEMBERED;
+      visible = [];
+      sight = Math.max(0, sightRadius);
+      for (const h of hexesInRange(center, sight)) {
+        if (!inMap(h)) continue;
+        const i = indexOf(h);
+        if (state[i] === FOG.UNKNOWN) continue;
+        state[i] = FOG.VISIBLE;
+        visible.push(i);
+      }
     },
 
     /**

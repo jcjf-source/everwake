@@ -1,7 +1,7 @@
 /**
  * The discovery journal: a lasting record of places found and what came of
  * them. *Player persistent state* (knowledge survives death; see "State
- * model" in docs/TECHNICAL.md); saved with the game in Task 13.
+ * model" in docs/TECHNICAL.md); saved with the game (systems/persistence.js).
  *
  * The turn pipeline (src/core/game.js) records every journal-worthy event
  * (`discovered`, `interacted`) with the turn it happened on. Unlike the game

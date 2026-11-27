@@ -23,7 +23,7 @@
  *   7. expedition add the turn to the expedition's tally; a return or a
  *                 defeat finishes the expedition and files its report
  *                 (systems/expedition.js, Task 12).
- *   8. save       call the save hook (persistence arrives in Task 13).
+ *   8. save       call the save hook (main.js autosaves: systems/saveSlot.js).
  *
  * Nothing here runs on its own: time passes only when an action succeeds.
  * Between expeditions every action is refused (`noExpedition`) until

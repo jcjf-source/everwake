@@ -55,6 +55,10 @@ async function boot() {
     { buyUpgrade, upgradeView },
     { lastReport },
     expeditionText,
+    { parseSave, gameSummary },
+    saveSlot,
+    saveText,
+    savePanels,
   ] = await Promise.all([
     import('./render/canvasSurface.js'),
     import('./render/camera.js'),
@@ -93,12 +97,17 @@ async function boot() {
     import('./systems/progression.js'),
     import('./systems/expedition.js'),
     import('./ui/expeditionText.js'),
+    import('./systems/persistence.js'),
+    import('./systems/saveSlot.js'),
+    import('./ui/saveText.js'),
+    import('./ui/savePanels.js'),
   ]);
 
   const canvas = document.getElementById('world-canvas');
 
-  // The seed is kept in the URL (?seed=…) so reloading or sharing the link
-  // reopens the same world. Real save data arrives with persistence (Task 13).
+  // The seed is also kept in the URL (?seed=…) so the link can be shared.
+  // The save (Task 13) is what a reload restores; a link naming another
+  // world is offered on the start screen as a new world.
   function seedFromUrl() {
     const raw = new URLSearchParams(window.location.search).get('seed');
     if (raw === null) return null;
@@ -113,7 +122,7 @@ async function boot() {
 
   // Game state (core/game.js): the world, the player (expedition state:
   // position and inventory; replaced when an expedition sets out), map memory (player persistent state: only
-  // known/unknown is saved, Task 13), world changes (gathered nodes, used
+  // known/unknown is saved), world changes (gathered nodes, used
   // POIs), the journal (discoveries), the world clock, the log, the
   // expedition under way and permanent progress (insight, upgrades, reports). `world`, `player` and `memory` are
   // shorthands for the current game's parts, not separate state.
@@ -122,15 +131,45 @@ async function boot() {
     game = next;
     ({ world, player, memory } = next);
   }
-  useGame(createGame(createWorld(seedFromUrl() ?? randomSeed(), WORLD_RADIUS)));
+  // Saving (Task 13, systems/saveSlot.js): the saved world is loaded if it
+  // can be. A damaged save is held (`damaged`) and never written over until
+  // the player chooses on the recovery screen; meanwhile a throwaway world
+  // sits behind it and nothing is saved. Without usable storage the game
+  // runs unsaved and says so.
+  const urlSeed = seedFromUrl();
+  const opened = saveSlot.openStorage();
+  const storage = opened.ok ? opened.storage : null;
+  const slot = storage ? saveSlot.readSave(storage, { radius: WORLD_RADIUS }) : { status: 'unavailable', error: opened.error };
+  /** @type {{ raw: string, error: string } | null} */
+  let damaged = slot.status === 'damaged' ? { raw: slot.raw, error: slot.error } : null;
+  /** What the save status line says (ui/saveText.js describeSaveStatus). */
+  let saveStatus = { state: 'none' };
+  if (slot.status === 'unavailable') saveStatus = { state: 'unavailable', error: slot.error };
+  else if (damaged) saveStatus = { state: 'held' };
+  else if (slot.status === 'ok') {
+    const t = timeOf(slot.game.clock.turn);
+    saveStatus = { state: 'saved', turn: slot.game.clock.turn, day: t.day, part: t.part };
+  }
+  useGame(slot.status === 'ok' ? slot.game : createGame(createWorld(urlSeed ?? randomSeed(), WORLD_RADIUS)));
   writeSeedToUrl(world.seed);
+
+  /** Save the game now (after every turn, setting out, an upgrade, a new world or an import). */
+  function autosave() {
+    if (!storage) return;
+    if (damaged) { saveStatus = { state: 'held' }; return; }
+    const r = saveSlot.writeSave(storage, game);
+    const t = timeOf(game.clock.turn);
+    saveStatus = r.ok ? { state: 'saved', turn: game.clock.turn, day: t.day, part: t.part } : { state: 'failed', error: r.error };
+    if (!r.ok) console.warn(`Everwake: ${r.error}`);
+  }
 
   // Every player action goes through this pipeline: validate, apply, advance
   // the clock, reactions (enemies, systems/enemies.js), visibility, log,
-  // save (Task 13). Invalid actions cost no turn; nothing happens while idle.
+  // expedition tally, save. Invalid actions cost no turn and are not saved;
+  // nothing happens while idle.
   // Reactions: the enemies (with real blows), then the player's condition
   // (defeat at 0 health, recovery on sanctuary ground): systems/combat.js.
-  const turns = createTurnSystem({ reactions: combat.createCombatReactions(), onSave: null });
+  const turns = createTurnSystem({ reactions: combat.createCombatReactions(), onSave: () => autosave() });
 
   // UI/view state only: nothing here is game/world state and none is saved.
   // `preview` is a planned route awaiting confirmation; `noWay` marks a hex
@@ -279,7 +318,12 @@ async function boot() {
       pendingEnd = null;
       showEnded();
     }
+    // Between expeditions the sanctuary screen is always up (after a reload,
+    // or once a dialog over it closes).
+    if (game.expedition.status === 'ended' && !document.querySelector('dialog[open]')) sanctuaryPanel.show();
     hud.showReadout(readoutText);
+    hud.showSaveWarning(saveText.hudSaveWarning(saveStatus));
+    worldPanel.showSaveStatus(saveText.describeSaveStatus(saveStatus));
     hud.showStatus(text.describePlayer(player));
     hud.showHealth(combatText.describeHealth(player.health, player.maxHealth), player.health, player.maxHealth);
     hud.showClock(clockText.describeClock(game.clock.turn), timeOf(game.clock.turn).part);
@@ -430,6 +474,7 @@ async function boot() {
     {
       readout: document.getElementById('selection-readout'),
       status: document.getElementById('player-status'),
+      saveWarning: document.getElementById('save-warning'),
       coordsToggle: document.getElementById('coords-toggle'),
       zoomIn: document.getElementById('zoom-in'),
       zoomOut: document.getElementById('zoom-out'),
@@ -493,20 +538,174 @@ async function boot() {
       error: document.getElementById('seed-error'),
       random: document.getElementById('seed-random'),
       cancel: document.getElementById('seed-cancel'),
+      saveStatus: document.getElementById('save-status'),
+      saveMessage: document.getElementById('save-message'),
+      exportSave: document.getElementById('save-export'),
+      importSave: document.getElementById('save-import'),
     },
     {
-      onCreate(seed) {
-        travel.stop({ silent: true });
-        useGame(createGame(createWorld(seed, WORLD_RADIUS)));
-        writeSeedToUrl(world.seed);
-        worldPanel.showSeed(world.seed);
-        Object.assign(ui, { selected: null, hovered: null, preview: null, noWay: null, travelTarget: null });
-        pendingEnd = null;
-        sanctuaryPanel.close();
-        readoutText = text.MOVE_HINT;
-        refresh();
-        updateCamera(camera.centerOnHex(cam, player.position));
+      onCreate: (seed) => { requestNewWorld(seed); },
+      onExport: () => exportSave(),
+      onImport: (show) => pickImport(show),
+    },
+  );
+  document.getElementById('world-dialog').addEventListener('close', () => refresh());
+
+  // ---------------------------------------------------------------- saving and loading (Task 13)
+
+  /** Give the browser a file to save. */
+  function download(name, content) {
+    const url = URL.createObjectURL(new Blob([content], { type: 'application/json' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  }
+
+  /** Download the current world's save; returns what to show. */
+  function exportSave() {
+    if (damaged) return 'There is no world to export yet: download the damaged save instead.';
+    const name = saveSlot.exportFileName(game, timeOf(game.clock.turn).day);
+    download(name, saveSlot.exportText(game));
+    return `Save exported as ${name}.`;
+  }
+
+  /** What the current save holds, for the confirmations (null while the save is damaged). */
+  const currentSummary = () => (damaged ? null : gameSummary(game));
+
+  /**
+   * Make way for a new game in the slot: a damaged save is kept as a backup
+   * first (if that fails, the player is asked whether to go on without one).
+   * Resolves true when it is safe to replace.
+   */
+  async function clearDamaged() {
+    if (!damaged) return true;
+    const kept = storage ? saveSlot.setAsideDamaged(storage, damaged.raw) : { ok: false, error: 'browser storage is unavailable' };
+    if (!kept.ok && !(await confirmPanel.ask(saveText.confirmNoBackup(kept.error)))) return false;
+    damaged = null;
+    recoveryPanel.close();
+    return true;
+  }
+
+  /** Put `next` in play (a new world or an imported save), save it, and show it. */
+  function adopt(next, readout) {
+    travel.stop({ silent: true });
+    useGame(next);
+    writeSeedToUrl(world.seed);
+    worldPanel.showSeed(world.seed);
+    Object.assign(ui, { selected: null, hovered: null, preview: null, noWay: null, travelTarget: null });
+    pendingEnd = null;
+    lastEvents = [];
+    sanctuaryPanel.close();
+    startPanel.close();
+    autosave();
+    readoutText = readout;
+    updateCamera(camera.centerOnHex(cam, player.position));
+    refresh(); // between expeditions this opens the sanctuary screen
+  }
+
+  /** The seed dialog chose `seed`: confirm, then replace the world. */
+  async function requestNewWorld(seed) {
+    const ok = await confirmPanel.ask(
+      saveText.confirmReplace({ current: currentSummary(), damaged: !!damaged, seed }),
+      { offerExport: !damaged },
+    );
+    if (!ok || !(await clearDamaged())) { refresh(); return; }
+    adopt(createGame(createWorld(seed, WORLD_RADIUS)), text.MOVE_HINT);
+  }
+
+  // Import: one hidden file input, shared by every panel that offers it.
+  const importInput = document.getElementById('import-file');
+  let onPicked = null;
+  importInput.addEventListener('change', () => {
+    const file = importInput.files?.[0] ?? null;
+    importInput.value = '';
+    const cb = onPicked;
+    onPicked = null;
+    if (file && cb) cb(file);
+  });
+
+  /** Pick a save file, check it, confirm, and load it. Problems are shown through `show`. */
+  function pickImport(show) {
+    show('');
+    onPicked = async (file) => {
+      if (file.size > saveText.MAX_IMPORT_BYTES) { show(saveText.describeImportError('the file is far too large to be a save')); return; }
+      let content;
+      try {
+        content = await file.text();
+      } catch (err) {
+        show(saveText.describeImportError(`the file could not be read (${err?.message ?? err})`));
+        return;
+      }
+      const r = parseSave(content, { radius: WORLD_RADIUS });
+      if (!r.ok) { show(saveText.describeImportError(r.error)); return; }
+      const incoming = gameSummary(r.game);
+      const ok = await confirmPanel.ask(
+        saveText.confirmImport({ current: currentSummary(), damaged: !!damaged, incoming }),
+        { offerExport: !damaged },
+      );
+      if (!ok || !(await clearDamaged())) { refresh(); return; }
+      adopt(r.game, saveText.describeImported(incoming));
+      worldPanel.close();
+    };
+    importInput.click();
+  }
+
+  const confirmPanel = savePanels.createConfirmPanel(
+    {
+      dialog: document.getElementById('confirm-dialog'),
+      title: document.getElementById('confirm-title'),
+      lines: document.getElementById('confirm-lines'),
+      confirm: document.getElementById('confirm-ok'),
+      cancel: document.getElementById('confirm-cancel'),
+      exportFirst: document.getElementById('confirm-export'),
+      message: document.getElementById('confirm-message'),
+    },
+    { onExport: () => exportSave() },
+  );
+
+  const startPanel = savePanels.createStartPanel(
+    {
+      dialog: document.getElementById('start-dialog'),
+      summary: document.getElementById('start-summary'),
+      detail: document.getElementById('start-detail'),
+      link: document.getElementById('start-link'),
+      message: document.getElementById('start-message'),
+      cont: document.getElementById('start-continue'),
+      newWorld: document.getElementById('start-new'),
+      importSave: document.getElementById('start-import'),
+    },
+    {
+      onContinue() {
+        readoutText = saveText.describeContinued(gameSummary(game));
+        refresh(); // between expeditions this opens the sanctuary screen
       },
+      onNewWorld: () => worldPanel.open(urlSeed && urlSeed !== world.seed ? urlSeed : null),
+      onImport: (show) => pickImport(show),
+    },
+  );
+
+  const recoveryPanel = savePanels.createRecoveryPanel(
+    {
+      dialog: document.getElementById('recovery-dialog'),
+      reason: document.getElementById('recovery-reason'),
+      message: document.getElementById('recovery-message'),
+      download: document.getElementById('recovery-download'),
+      retry: document.getElementById('recovery-retry'),
+      importSave: document.getElementById('recovery-import'),
+      newWorld: document.getElementById('recovery-new'),
+    },
+    {
+      onDownload() {
+        download('everwake-damaged-save.json', damaged.raw);
+        return 'Damaged save downloaded as everwake-damaged-save.json.';
+      },
+      onRetry: () => window.location.reload(),
+      onImport: (show) => pickImport(show),
+      onNewWorld: () => worldPanel.open(urlSeed),
     },
   );
 
@@ -571,6 +770,7 @@ async function boot() {
       }),
       onBuy(id) {
         const r = buyUpgrade(game, id);
+        if (r.ok) autosave();
         const shown = r.ok ? expeditionText.describeUpgraded(r.event) : expeditionText.describeBuyRefused(r.reason, r.cost ?? null);
         return shown;
       },
@@ -578,6 +778,7 @@ async function boot() {
         const r = setOut(game);
         if (!r.ok) return;
         useGame(game); // a new expedition has a new player
+        autosave();
         sanctuaryPanel.close();
         readoutText = clockText.describeEvents(r.events);
         refresh();
@@ -636,7 +837,25 @@ async function boot() {
     },
   );
 
+  document.getElementById('sanctuary-world').addEventListener('click', () => worldPanel.open());
+
   worldPanel.showSeed(world.seed);
+  // What the page opens on: the recovery screen for a damaged save, the
+  // start screen for a saved world, or straight into a new world (saved now).
+  if (damaged) {
+    recoveryPanel.show(saveText.recoveryReason(damaged.error));
+  } else if (slot.status === 'ok') {
+    const sum = gameSummary(game);
+    const when = slot.savedAt ? new Date(slot.savedAt) : null;
+    const savedText = when && !Number.isNaN(when.getTime()) ? ` · saved ${when.toLocaleString()}` : '';
+    startPanel.show({
+      summary: saveText.describeSummary(sum),
+      detail: saveText.describeProgress(sum) + savedText,
+      link: urlSeed && urlSeed !== world.seed ? saveText.linkNote(urlSeed) : '',
+    });
+  } else {
+    autosave();
+  }
   refresh();
   hud.showZoom(cam);
 

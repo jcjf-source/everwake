@@ -5,6 +5,27 @@ This file records notable project changes. It begins as a documentation scaffold
 
 ## Unreleased
 
+### Task 13: Saving and loading
+- **Autosave:** the world is saved in this browser after every turn, when you set out, when you learn an upgrade, and when a new world begins. Reloading the page puts you back exactly where you were: mid-expedition, hunted if you were being hunted, or at the sanctuary screen between expeditions.
+- **What is saved:**
+  - the world's seed (the map is regenerated from it, identically);
+  - spent resource nodes and used places;
+  - the map you have explored, the journal, and the clock;
+  - every enemy's position, health and state (the fallen stay fallen);
+  - your position, health and pack;
+  - the expedition under way, the reports of past ones, insight and upgrades.
+- **Start screen:** when a save exists, the page opens on **Welcome back** with the world, expedition, time, progress and when it was saved. Choose **Continue** (or press Escape), **New world** or **Import save**. A link naming a different world no longer replaces your save: the start screen mentions it, and New world offers that seed.
+- **Replacing a world needs confirmation:** creating a new world or importing a save opens **Replace this world?** / **Load this save?**. It says what will be erased (seed, hexes mapped, places, insight, upgrade levels, expedition) and that it cannot be undone. It offers **Export save first**. **Keep my world** has focus.
+- **Export and import:** the Seed dialog has a **Save** section with the save status, **Export save** (downloads a .json file) and **Import save** (loads one after checking it and asking first). The sanctuary screen has a **World & save** button for the same dialog between expeditions.
+- **Damaged saves:** if the save cannot be loaded, a recovery screen says why. Nothing is deleted, and the game does not save over it until you choose:
+  - **Download damaged save**;
+  - **Try again**;
+  - **Import save**;
+  - **New world**, which keeps the damaged save as a backup in the browser.
+- **Saving problems are visible:** if the browser blocks storage or it is full, a red note under the title says the game is not being saved. The last good save is kept.
+- Saves are versioned and fully validated on load, including whether they fit the world they name. A save from a different world generator or a newer version is refused with a reason.
+- Tests: save format round trips (including playing on in lockstep after a reload), regenerated baseline, persisted world changes, sight restored without new mapping, every validation refusal and a fuzz pass, the storage slot (empty, damaged, blocked, full, writes that do not stick), export, and text (277 tests total). The browser check adds a saving-and-loading flow on two viewports: autosave, the start screen, confirmations, a link to another world, reloading between expeditions, export, import (bad and good files) and the damaged-save recovery.
+
 ### Task 12: Expeditions, the sanctuary and permanent upgrades
 - **Expeditions:** the game starts on expedition 1. An expedition ends in one of two ways:
   - **Return:** a **Return** button appears on sanctuary ground (the sanctuary and its six neighbours) once you have set off. It takes one turn and ends the expedition. You keep everything you carry and wear.

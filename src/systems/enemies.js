@@ -4,8 +4,9 @@
  *
  * The roster starts from the world's generated spawns (enemyPlacement.js)
  * and is *live world state*: positions and modes change as the player acts.
- * It is not saved yet (Task 13 decides how much of it persists). Between
- * expeditions the survivors go home healed (`reset`); the fallen stay fallen.
+ * It is saved whole (Task 13: `serialize`, `restoreEnemies`), so a reload
+ * mid-chase resumes the chase. Between expeditions the survivors go home
+ * healed (`reset`); the fallen stay fallen.
  *
  * AI (deterministic; every enemy acts once per player action, in id order,
  * after the player and the clock, and never while the game is idle):
@@ -118,7 +119,66 @@ export function createEnemies(spawns = []) {
       enemy.position = { q: h.q, r: h.r };
       byHex.set(hexKey(h), enemy);
     },
+    /**
+     * Save form (Task 13): `{ version, list: [[id, q, r, health, mode], …] }`
+     * in id order. Type and home are not stored: they come from the world's
+     * spawns (restoreEnemies).
+     */
+    serialize() {
+      return { version: ENEMIES_VERSION, list: list.map((e) => [e.id, e.position.q, e.position.r, e.health, e.mode]) };
+    },
+    /** @internal used by restoreEnemies: put every enemy where the save says, then rebuild the hex index. */
+    _place(states) {
+      byHex.clear();
+      for (const e of list) {
+        const [, q, r, health, mode] = states.get(e.id);
+        e.position = { q, r };
+        e.health = health;
+        e.mode = mode;
+        if (health > 0) byHex.set(hexKey(e.position), e);
+      }
+    },
   };
+}
+
+/** Version of the roster's save form. */
+export const ENEMIES_VERSION = 1;
+const ENEMY_MODES = Object.freeze(['idle', 'hunting', 'returning']);
+
+/**
+ * Rebuild the live roster from its save form, over the world's generated
+ * `spawns` (which give each enemy its type and home). Every spawn must be
+ * listed exactly once; living enemies must stand on distinct walkable map
+ * hexes outside the sanctuary ward. Never throws, never half-applies.
+ * @returns {{ ok: true, enemies: ReturnType<typeof createEnemies> } | { ok: false, error: string }}
+ */
+export function restoreEnemies(data, spawns, world) {
+  if (!data || typeof data !== 'object') return { ok: false, error: 'enemies save is not an object' };
+  if (data.version !== ENEMIES_VERSION) return { ok: false, error: `unsupported enemies version ${data.version}` };
+  if (!Array.isArray(data.list)) return { ok: false, error: 'enemies must be a list' };
+  const byId = new Map(spawns.map((s) => [s.id, s]));
+  const states = new Map();
+  const taken = new Set();
+  for (const e of data.list) {
+    if (!Array.isArray(e) || e.length !== 5 || !e.slice(0, 4).every(Number.isSafeInteger)) return { ok: false, error: 'each enemy must be [id, q, r, health, mode]' };
+    const [id, q, r, health, mode] = e;
+    const spawn = byId.get(id);
+    if (!spawn) return { ok: false, error: `enemy ${id} is not in this world` };
+    if (states.has(id)) return { ok: false, error: `enemy ${id} is listed twice` };
+    if (!ENEMY_MODES.includes(mode)) return { ok: false, error: `enemy ${id} has unknown mode ${mode}` };
+    if (health < 0 || health > ENEMY_TYPES[spawn.type].health) return { ok: false, error: `enemy ${id} has impossible health ${health}` };
+    if (health > 0) {
+      const at = { q, r };
+      if (!world.has(at) || !world.isWalkable(at) || inSanctuaryWard(world, at)) return { ok: false, error: `enemy ${id} stands where it cannot (${q}, ${r})` };
+      if (taken.has(hexKey(at))) return { ok: false, error: `two enemies share hex ${q}, ${r}` };
+      taken.add(hexKey(at));
+    }
+    states.set(id, e);
+  }
+  if (states.size !== spawns.length) return { ok: false, error: `the save lists ${states.size} enemies; this world has ${spawns.length}` };
+  const enemies = createEnemies(spawns);
+  enemies._place(states);
+  return { ok: true, enemies };
 }
 
 /** Is `h` on the sanctuary's warded ground (the sanctuary and its six neighbours)? */
