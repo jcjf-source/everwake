@@ -6,6 +6,10 @@
 import { timeOf } from '../core/clock.js';
 import { NODE_KINDS } from '../data/resources.js';
 import { describeGathered } from './gatherText.js';
+import { describeDiscovered, describeInteracted } from './poiText.js';
+import { describeEnemyEvent } from './enemyText.js';
+import { describeCombatEvent } from './combatText.js';
+import { describeItemEvent } from './itemText.js';
 
 const cap = (s) => s[0].toUpperCase() + s.slice(1);
 
@@ -26,6 +30,13 @@ export function describeEvent(e) {
     }
   }
   if (e.type === 'gathered') return describeGathered(e, NODE_KINDS[e.kind]);
+  if (e.type === 'discovered') return describeDiscovered(e);
+  if (e.type === 'interacted') return describeInteracted(e);
+  const item = describeItemEvent(e);
+  if (item !== null) return item;
+  const combat = describeCombatEvent(e);
+  if (combat !== null) return combat;
+  if (e.type.startsWith('enemy')) return describeEnemyEvent(e);
   return String(e.type);
 }
 

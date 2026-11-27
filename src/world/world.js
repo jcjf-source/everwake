@@ -3,8 +3,9 @@
  * tiles, and the sanctuary location.
  *
  * This is the immutable *world definition* (seed-driven), including the
- * generated resource nodes (resourceNodes.js). Mutable world changes
- * (gathered nodes, later opened chests…) live in worldChanges.js.
+ * generated resource nodes (resourceNodes.js) and points of interest
+ * (poiPlacement.js) and enemy spawns (enemyPlacement.js). Mutable world changes (gathered nodes, searched or
+ * opened POIs) live in worldChanges.js.
  *
  * Expanding to chunks later: `createTerrainGenerator(seed).tileAt(q, r)` is
  * already a pure function of seed and coordinate, so a chunk is just the
@@ -18,6 +19,8 @@ import { createHexGrid } from './hexGrid.js';
 import { createTerrainGenerator, GENERATOR_VERSION } from './worldGen.js';
 import { seedToNumber } from './seed.js';
 import { placeResourceNodes, RESOURCE_LAYOUT_VERSION } from './resourceNodes.js';
+import { placePois, POI_LAYOUT_VERSION } from './poiPlacement.js';
+import { placeEnemies, ENEMY_LAYOUT_VERSION } from './enemyPlacement.js';
 
 const ORIGIN = hex(0, 0);
 
@@ -49,9 +52,17 @@ export function createWorld(seed, radius) {
 
   const sanctuary = placeSanctuary(grid, tileAt, isWalkable, radius);
   const resources = placeResourceNodes(seedNumber, grid.cells, tileAt, indexOf, sanctuary.hex);
+  const pois = placePois(seedNumber, {
+    radius, has: grid.has, tileAt, isWalkable, resourceAt: resources.nodeAt, indexOf, sanctuary: sanctuary.hex,
+  });
+  const enemySpawns = placeEnemies(seedNumber, {
+    radius, has: grid.has, tileAt, isWalkable, poiAt: pois.poiAt, pois: pois.pois, sanctuary: sanctuary.hex,
+  });
 
   return Object.freeze({
     seed,
+    /** Numeric form of the seed (hash input for per-coordinate features). */
+    seedNumber,
     generatorVersion: GENERATOR_VERSION,
     radius,
     cells: grid.cells,
@@ -66,6 +77,14 @@ export function createWorld(seed, radius) {
     resourceAt: resources.nodeAt,
     /** Every generated resource node, in map row order. */
     resourceNodes: resources.nodes,
+    poiLayoutVersion: POI_LAYOUT_VERSION,
+    /** The generated point of interest at a hex (baseline: never used), or null. */
+    poiAt: pois.poiAt,
+    /** Every generated point of interest, in map row order. */
+    pois: pois.pois,
+    enemyLayoutVersion: ENEMY_LAYOUT_VERSION,
+    /** Where each enemy lives (baseline: live positions are game state, systems/enemies.js), row order. */
+    enemySpawns,
   });
 }
 

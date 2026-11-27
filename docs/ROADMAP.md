@@ -22,16 +22,16 @@ Task files are executed one at a time. Mark a task complete only after its accep
 ## Milestone 3 — Turn-based game loop
 - [x] Task 06: Action/turn clock (2026-11-27)
 - [x] Task 07: Resource nodes and contextual interactions (2026-11-27)
-- [ ] Task 08: Points of interest and discoveries
+- [x] Task 08: Points of interest and discoveries (2026-11-27)
 **Exit criteria:** actions consume turns and exploration provides tangible rewards.
 
 ## Milestone 4 — Threats
-- [ ] Task 09: Enemy entities and basic AI
-- [ ] Task 10: Tactical combat and defeat handling
+- [x] Task 09: Enemy entities and basic AI (2026-11-27)
+- [x] Task 10: Tactical combat and defeat handling (2026-11-27)
 **Exit criteria:** encounter, fight, flee, and lose health reliably.
 
 ## Milestone 5 — Expedition progression
-- [ ] Task 11: Inventory, equipment, consumables
+- [x] Task 11: Inventory, equipment, consumables (2026-11-27)
 - [ ] Task 12: Death, expedition summary, permanent upgrades, sanctuary return
 - [ ] Task 13: Persistence and save safety
 **Exit criteria:** complete multiple expeditions in one persistent world and progress between them.

@@ -64,20 +64,41 @@ export function createMapMemory(radius) {
      * Look around from `center`: hexes within `sightRadius` (hex distance)
      * become VISIBLE, and hexes that were visible but are now out of range
      * become REMEMBERED. Call on start and after every move.
-     * @returns {{ revealed: number }} hexes seen for the first time
+     * @returns {{ revealed: number, newly: Array<{q:number,r:number}> }}
+     *   `revealed`: how many hexes were seen for the first time; `newly`:
+     *   those hexes (discovery of POIs reads them).
      */
     observe(center, sightRadius = SIGHT_RADIUS) {
       for (const i of visible) state[i] = FOG.REMEMBERED;
       visible = [];
-      let revealed = 0;
+      const newly = [];
       for (const h of hexesInRange(center, Math.max(0, sightRadius))) {
         if (!inMap(h)) continue;
         const i = indexOf(h);
-        if (state[i] === FOG.UNKNOWN) { revealed++; knownCount++; }
+        if (state[i] === FOG.UNKNOWN) { newly.push(h); knownCount++; }
         state[i] = FOG.VISIBLE;
         visible.push(i);
       }
-      return { revealed };
+      return { revealed: newly.length, newly };
+    },
+
+    /**
+     * Map the hexes within `radius` of `center` without seeing them: unknown
+     * hexes become REMEMBERED (drawn dim); visible ones stay visible. Used
+     * for knowledge gained without sight (a shrine shows the land around).
+     * @returns {{ revealed: number, newly: Array<{q:number,r:number}> }}
+     */
+    reveal(center, radius) {
+      const newly = [];
+      for (const h of hexesInRange(center, Math.max(0, radius))) {
+        if (!inMap(h)) continue;
+        const i = indexOf(h);
+        if (state[i] !== FOG.UNKNOWN) continue;
+        state[i] = FOG.REMEMBERED;
+        knownCount++;
+        newly.push(h);
+      }
+      return { revealed: newly.length, newly };
     },
 
     /** Every known hex, in a stable order (row by row). */

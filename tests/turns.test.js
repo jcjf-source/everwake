@@ -109,7 +109,10 @@ test('a new game starts at turn 0, day 1 morning, on the sanctuary, with only th
   assert.deepEqual(game.player.position, world.sanctuary);
   assert.equal(game.memory.stateAt(world.sanctuary), FOG.VISIBLE);
   assert.equal(game.memory.knownCount, 61);
-  assert.deepEqual(game.log, []);
+  // The only log entries at the start are POIs already in sight (Task 08).
+  const inSight = world.pois.filter((p) => game.memory.isKnown(p));
+  assert.deepEqual(game.log.map((e) => [e.type, e.at.q, e.at.r]).sort(), inSight.map((p) => ['discovered', p.q, p.r]).sort());
+  assert.equal(game.journal.entries.length, inSight.length);
 });
 
 test('a successful move costs exactly one turn and moves one hex', () => {

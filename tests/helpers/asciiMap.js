@@ -34,7 +34,9 @@ export function asciiWorld(rows) {
   const tileAt = (h) => tiles.get(hexKey(h)) ?? null;
   const has = (h) => !!h && tiles.has(hexKey(h));
   const nodes = new Map();
+  const pois = new Map();
   const world = {
+    seedNumber: 1,
     has,
     tileAt,
     isWalkable: (h) => { const t = tileAt(h); return !!t && TERRAIN[t.terrain].walkable; },
@@ -45,6 +47,12 @@ export function asciiWorld(rows) {
     /** Place a node of `kind` (data/resources.js) holding `uses` gathers. */
     setNode(h, kind, uses) {
       nodes.set(hexKey(h), Object.freeze({ q: h.q, r: h.r, kind, resource: NODE_KINDS[kind].resource, uses }));
+    },
+    /** Hand-placed points of interest (none unless a test adds them). */
+    poiAt: (h) => pois.get(hexKey(h)) ?? null,
+    /** Place a POI of `type` (data/pois.js) holding `uses` uses. */
+    setPoi(h, type, uses = 1, name = `Test ${type}`) {
+      pois.set(hexKey(h), Object.freeze({ q: h.q, r: h.r, type, name, uses }));
     },
     cells: () => [...tiles.values()].map((t) => hex(t.q, t.r)),
   };

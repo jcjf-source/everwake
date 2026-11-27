@@ -22,6 +22,8 @@ import { drawStepRim, drawRoute, drawNoWayMarker, drawPlayer } from './entityArt
 import { FOG, canSee } from '../world/mapMemory.js';
 import { drawFogEdge } from './fogArt.js';
 import { drawResourceNodes, drawGatherTargets, NODE_MIN_SIZE } from './resourceArt.js';
+import { drawPois, drawInteractTargets, POI_MIN_SIZE } from './poiArt.js';
+import { drawEnemies } from './enemyArt.js';
 
 /** Veil over remembered (seen before, not in sight) hexes. */
 export const REMEMBERED_VEIL = 'rgba(14,20,22,0.58)';
@@ -79,9 +81,14 @@ function traceHex(ctx, cx, cy, size) {
  *   fog?: { stateAt: (h: {q:number,r:number}) => number, isKnown: Function, isVisible: Function } | null,
  *   nodeAt?: ((h: {q:number,r:number}) => object | null) | null,
  *   gatherable?: Array<{q:number,r:number}>,
+ *   poiAt?: ((h: {q:number,r:number}) => object | null) | null,
+ *   usable?: Array<{q:number,r:number}>,
+ *   enemies?: Array<{ position: {q:number,r:number}, type: string, health: number, maxHealth: number, intent: string }>,
  * }} frame `fog` omitted: everything is drawn as visible. `nodeAt`: the
  *   resource node state at a hex (gathering.js nodeState), asked only for
- *   mapped hexes; `gatherable`: nodes in reach now (ringed).
+ *   mapped hexes; `gatherable`: nodes in reach now (ringed). `poiAt` and
+ *   `usable`: the same for points of interest (systems/pois.js poiState).
+ *   `enemies`: enemies to draw (the caller passes only those in sight).
  */
 export function drawGrid(ctx, frame) {
   const { width, height, view, cells, tileAt, sanctuary, ui } = frame;
@@ -133,6 +140,15 @@ export function drawGrid(ctx, frame) {
     }
     drawResourceNodes(ctx, view, nodes);
   }
+  // Points of interest are landmarks too: shown once their hex is mapped.
+  if (frame.poiAt && size >= POI_MIN_SIZE) {
+    const pois = [];
+    for (const h of known) {
+      const p = frame.poiAt(h);
+      if (p) pois.push(p);
+    }
+    drawPois(ctx, view, pois);
+  }
 
   // Remembered terrain: one batched veil over every remembered hex.
   if (fog) {
@@ -151,9 +167,10 @@ export function drawGrid(ctx, frame) {
     drawFogEdge(ctx, view, cells, fog.stateAt);
   }
 
-  // Hexes the player can step to with one tap, and nodes they can gather now.
+  // Hexes the player can step to with one tap, and nodes / POIs they can use now.
   if (frame.stepRim) drawStepRim(ctx, view, frame.stepRim);
   if (frame.gatherable) drawGatherTargets(ctx, view, frame.gatherable);
+  if (frame.usable) drawInteractTargets(ctx, view, frame.usable);
 
   // Hover.
   if (ui.hovered && !(ui.selected && hexEquals(ui.hovered, ui.selected))) {
@@ -180,6 +197,7 @@ export function drawGrid(ctx, frame) {
   // Route preview or the route being travelled, then a "no way" marker.
   if (frame.route && frame.player) drawRoute(ctx, view, frame.player, frame.route.path, frame.route.mode);
   if (frame.noWay) drawNoWayMarker(ctx, view, frame.noWay);
+  if (frame.enemies) drawEnemies(ctx, view, frame.enemies.filter((e) => isOnScreen(view, e.position, width, height)));
   if (frame.player && isOnScreen(view, frame.player, width, height)) drawPlayer(ctx, view, frame.player);
 
   // Coordinate debug labels (only when hexes are big enough to read).
