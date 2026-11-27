@@ -10,6 +10,8 @@
  *  - an unmapped hex (fog of war): say so; routes cross mapped hexes only;
  *  - an impassable hex with a resource node: in reach if adjacent, else
  *    preview a route to a hex next to it, or say there is no way to it;
+ *  - a hex with an enemy in sight: inspect it (nothing moves; routes go
+ *    around enemies the player can see);
  *  - off the map: clear.
  * While travelling, a tap first stops travel. Tapping yourself, the
  * destination, or empty space only stops; any other hex is then handled as
@@ -33,7 +35,8 @@ import { planApproach } from '../systems/gathering.js';
  *   | { kind: 'unexplored', at: Hex }
  *   | { kind: 'node', at: Hex }
  *   | { kind: 'approach', preview: RoutePreview }
- *   | { kind: 'blocked', at: Hex }} TapAction
+ *   | { kind: 'blocked', at: Hex }
+ *   | { kind: 'enemy', at: Hex }} TapAction
  *   Resource nodes on impassable hexes (stone on a mountain, fish in deep
  *   water): `node` it is in reach (inspect; gather with the Gather button);
  *   `approach` preview a route to a hex next to it (tap again to travel);
@@ -41,11 +44,12 @@ import { planApproach } from '../systems/gathering.js';
  *
  * @param {{ position: Hex, preview: RoutePreview | null, travelling: Hex | null,
  *   travelTarget?: Hex | null, knows?: (h: Hex) => boolean,
- *   nodeAt?: (h: Hex) => unknown }} state
+ *   nodeAt?: (h: Hex) => unknown, enemyAt?: (h: Hex) => unknown }} state
  *   `travelling` is the current destination while a route is being walked,
  *   and `travelTarget` the node it goes next to, if any;
  *   `knows` is map memory's isKnown (omitted: everything is mapped);
- *   `nodeAt` is truthy for a mapped hex with a node that still has gathers.
+ *   `nodeAt` is truthy for a mapped hex with a node that still has gathers;
+ *   `enemyAt` is truthy for a hex with an enemy the player can see.
  * @param {Hex | null} tapped the map hex under the tap, or null if off the map
  * @returns {{ stop: boolean, action: TapAction | null }} `stop`: stop travel
  *   first; `action`: what to do next (null: nothing more).
@@ -60,10 +64,11 @@ export function decideTap(world, state, tapped) {
   return { stop: false, action: idleTap(world, state, tapped) };
 }
 
-function idleTap(world, { position, preview, knows = null, nodeAt = null }, tapped) {
+function idleTap(world, { position, preview, knows = null, nodeAt = null, enemyAt = null }, tapped) {
   if (!tapped || !world.has(tapped)) return { kind: 'clear' };
   if (hexEquals(tapped, position)) return { kind: 'here' };
   if (knows && !knows(tapped)) return { kind: 'unexplored', at: tapped };
+  if (enemyAt && enemyAt(tapped)) return { kind: 'enemy', at: tapped };
   // A node on a hex nobody can stand on is gathered from next to it.
   if (nodeAt && !world.isWalkable(tapped) && nodeAt(tapped)) {
     if (hexDistance(tapped, position) === 1) return { kind: 'node', at: tapped };
@@ -76,7 +81,7 @@ function idleTap(world, { position, preview, knows = null, nodeAt = null }, tapp
   if (hexDistance(tapped, position) === 1) {
     return world.isWalkable(tapped) ? { kind: 'step', to: tapped } : { kind: 'impassable', at: tapped };
   }
-  const route = planRoute(world, position, tapped, { knows });
+  const route = planRoute(world, position, tapped, { knows, avoid: enemyAt });
   if (route.status === 'impassable') return { kind: 'impassable', at: tapped };
   if (route.status !== 'ok') return { kind: 'unreachable', at: tapped };
   const next = { destination: tapped, path: route.path, cost: route.cost };

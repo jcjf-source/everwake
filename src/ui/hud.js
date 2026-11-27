@@ -1,9 +1,10 @@
 /**
- * HTML overlay: the feedback readout, the player status line, the world
- * clock with its Wait button, the inventory line, the contextual Gather
- * buttons, the
- * coordinate debug toggle, and zoom / recentre buttons (an alternative to
- * wheel and pinch). Recentre centres on the player.
+ * HTML overlay: the feedback readout, the player status line, the health
+ * line, the world
+ * clock with its Wait button, the inventory line, the contextual action
+ * buttons (Attack / Defend / Flee / Use in a fight, Search / Open / Read for
+ * points of interest, Gather for resource nodes), the coordinate debug toggle, and zoom / recentre buttons (an
+ * alternative to wheel and pinch). Recentre centres on the player.
  */
 import { hexDistance } from '../world/hex.js';
 
@@ -38,15 +39,15 @@ export function describeSelection(selected, terrain = null, sanctuary = null) {
  * @param {{
  *   readout: HTMLElement, status: HTMLElement, coordsToggle: HTMLButtonElement,
  *   zoomIn: HTMLButtonElement, zoomOut: HTMLButtonElement, recenter: HTMLButtonElement,
- *   clock: HTMLElement, wait: HTMLButtonElement,
- *   inventory: HTMLElement, gather: HTMLElement,
+ *   clock: HTMLElement, wait: HTMLButtonElement, health: HTMLElement,
+ *   inventory: HTMLElement, actions: HTMLElement,
  * }} el
  * @param {{
  *   onToggleCoords: (on: boolean) => void,
  *   onZoomStep: (factor: number) => void,
  *   onRecenter: () => void,
  *   onWait: () => void,
- *   onGather: (index: number) => void,
+ *   onAction: (index: number) => void,
  * }} handlers
  */
 export function createHud(el, handlers) {
@@ -59,11 +60,11 @@ export function createHud(el, handlers) {
   el.zoomOut.addEventListener('click', () => handlers.onZoomStep(1 / 1.25));
   el.recenter.addEventListener('click', () => handlers.onRecenter());
   el.wait.addEventListener('click', () => handlers.onWait());
-  el.gather.addEventListener('click', (e) => {
+  el.actions.addEventListener('click', (e) => {
     const btn = e.target.closest('button[data-index]');
-    if (btn) handlers.onGather(Number(btn.dataset.index));
+    if (btn) handlers.onAction(Number(btn.dataset.index));
   });
-  let gatherSig = null;
+  let actionsSig = null;
 
   return {
     /** Main feedback line (selection, route, travel progress). */
@@ -73,6 +74,15 @@ export function createHud(el, handlers) {
     /** Player position. */
     showStatus(text) {
       el.status.textContent = text;
+    },
+    /** Health line ("Health 18/24") with a bar; `data-low` marks a third or less. */
+    showHealth(text, health, max) {
+      el.health.textContent = text;
+      el.health.style.setProperty('--hp', String(max > 0 ? health / max : 0));
+      el.health.toggleAttribute('data-low', health * 3 <= max);
+      el.health.setAttribute('aria-valuenow', String(health));
+      el.health.setAttribute('aria-valuemax', String(max));
+      el.health.setAttribute('aria-valuetext', text);
     },
     /** World clock text; `part` (morning…night) styles the day-part mark. */
     showClock(text, part) {
@@ -95,19 +105,23 @@ export function createHud(el, handlers) {
       });
     },
     /**
-     * One Gather button per node in reach (`[{ key, resource, text, where,
-     * label }]`); hidden when there is none. Buttons are rebuilt only when
-     * the set changes, so focus survives a refresh.
+     * One button per thing that can be done here (`[{ key, kind: 'attack' |
+     * 'defend' | 'flee' | 'use' | 'interact' | 'gather', poi?, resource?,
+     * enemy?, text, where, label }]`): combat first, then POIs, then
+     * resource nodes; hidden when there is none. Buttons are rebuilt only
+     * when the set changes, so focus survives a refresh.
      */
-    showGather(buttons) {
+    showActions(buttons) {
       const sig = JSON.stringify(buttons);
-      if (sig === gatherSig) return;
-      gatherSig = sig;
-      el.gather.replaceChildren(...buttons.map((b, i) => {
+      if (sig === actionsSig) return;
+      actionsSig = sig;
+      el.actions.replaceChildren(...buttons.map((b, i) => {
         const btn = document.createElement('button');
         btn.type = 'button';
-        btn.className = 'hud-button hud-button--gather';
-        btn.dataset.resource = b.resource;
+        btn.className = `hud-button hud-button--action hud-button--${b.kind}`;
+        if (b.resource) btn.dataset.resource = b.resource;
+        if (b.poi) btn.dataset.poi = b.poi;
+        if (b.enemy) btn.dataset.enemy = b.enemy;
         btn.dataset.index = String(i);
         btn.setAttribute('aria-label', b.label);
         btn.title = b.label;
@@ -117,7 +131,7 @@ export function createHud(el, handlers) {
         btn.append(`${b.text} `, where);
         return btn;
       }));
-      el.gather.hidden = buttons.length === 0;
+      el.actions.hidden = buttons.length === 0;
     },
     /** Wait is unavailable while a route is being walked. */
     setWaitEnabled(on) {

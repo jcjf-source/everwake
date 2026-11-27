@@ -50,9 +50,12 @@ function setup() {
   return { game, world, marks, player, clock, events, positions, travel };
 }
 
-test('player starts at the given hex with empty packs', () => {
+test('player starts at the given hex with full health and the starting kit', () => {
   const p = createPlayer(hex(3, -2));
-  assert.deepEqual(p, { position: { q: 3, r: -2 }, inventory: { items: {} } });
+  assert.deepEqual(p, {
+    position: { q: 3, r: -2 }, health: 24, maxHealth: 24,
+    inventory: { items: { rations: 2, healingPotion: 1 }, equipped: { weapon: 'huntingKnife', armor: 'paddedJerkin' } },
+  });
 });
 
 test('checkStep: a walkable neighbour is allowed and nothing changes', () => {

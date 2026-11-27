@@ -2,15 +2,14 @@
  * Text for resource nodes, gathering and the inventory line. Pure; unit
  * tested, and mirrored by the browser check (tools/browser/check-world.mjs).
  */
-import { RESOURCES, RESOURCE_KINDS } from '../data/resources.js';
-import { countOf } from '../systems/inventory.js';
+import { RESOURCES } from '../data/resources.js';
 
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 const lower = (s) => s[0].toLowerCase() + s.slice(1);
 
 /** Screen arrows for DIRECTIONS (E, NE, NW, W, SW, SE; pointy-top). */
 export const DIRECTION_ARROWS = Object.freeze(['→', '↗', '↖', '←', '↙', '↘']);
-const DIRECTION_NAMES = ['east', 'north-east', 'north-west', 'west', 'south-west', 'south-east'];
+export const DIRECTION_NAMES = ['east', 'north-east', 'north-west', 'west', 'south-west', 'south-east'];
 
 /**
  * "Deadfall (wood) · 2 gathers left" or "Deadfall (wood) · picked clean".
@@ -65,10 +64,5 @@ export function gatherButton(o) {
   };
 }
 
-/** Inventory counts in a fixed order. */
-export const inventoryEntries = (inventory) =>
-  RESOURCE_KINDS.map((id) => ({ id, name: RESOURCES[id].name, count: countOf(inventory, id) }));
-
-/** "Wood 2 · Stone 0 · Herbs 1 · Food 0" (the inventory line's text). */
-export const describeInventory = (inventory) =>
-  inventoryEntries(inventory).map((e) => `${e.name} ${e.count}`).join(' · ');
+/** The inventory line (Task 11 moved it to itemText.js; re-exported for callers here). */
+export { inventoryEntries, describeInventory } from './itemText.js';

@@ -137,7 +137,7 @@ test('gathering costs one turn, fills the inventory, logs, and depletes the node
   assert.equal(snapshot(game), before);
   // The generated baseline is untouched: depletion is a world change.
   assert.equal(game.world.resourceAt(hex(1, 0)).uses, 2);
-  assert.deepEqual(game.changes.serialize(), { version: 1, gathered: [[1, 0, 2]] });
+  assert.deepEqual(game.changes.serialize(), { version: 2, gathered: [[1, 0, 2]], pois: [] });
 });
 
 test('invalid gathers cost no turn and change nothing', () => {
@@ -208,11 +208,15 @@ test('world changes: save round trip and malformed saves', () => {
   assert.equal(c.gathersTaken(hex(3, -2)), 3);
   assert.equal(c.gathersTaken(hex(0, 0)), 0);
   const saved = c.serialize();
-  assert.deepEqual(saved, { version: 1, gathered: [[3, -2, 3], [-1, 4, 1]] });
+  assert.deepEqual(saved, { version: 2, gathered: [[3, -2, 3], [-1, 4, 1]], pois: [] });
   const back = restoreWorldChanges(JSON.parse(JSON.stringify(saved)));
   assert.equal(back.ok, true);
   assert.deepEqual(back.changes.serialize(), saved);
-  for (const bad of [null, 5, { version: 2, gathered: [] }, { version: 1 }, { version: 1, gathered: [[1, 2]] },
+  // A Task 07 (version 1) save still loads, with no POI uses.
+  const v1 = restoreWorldChanges({ version: 1, gathered: [[3, -2, 3]] });
+  assert.equal(v1.ok, true);
+  assert.deepEqual(v1.changes.serialize(), { version: 2, gathered: [[3, -2, 3]], pois: [] });
+  for (const bad of [null, 5, { version: 3, gathered: [], pois: [] }, { version: 2, gathered: [] }, { version: 1 }, { version: 1, gathered: [[1, 2]] },
     { version: 1, gathered: [[1, 2, 0]] }, { version: 1, gathered: [[1, 2, 1], [1, 2, 3]] }, { version: 1, gathered: [['a', 2, 1]] }]) {
     assert.equal(restoreWorldChanges(bad).ok, false, JSON.stringify(bad));
   }

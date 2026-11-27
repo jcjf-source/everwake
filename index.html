@@ -42,20 +42,33 @@
           <path d="M9 4v13.8M15 6.2V20" stroke="currentColor" stroke-width="1.6"/>
         </svg>
       </button>
+      <button type="button" id="journal-button" class="hud-button hud-button--icon" aria-haspopup="dialog"
+              aria-label="Journal" title="Journal: places discovered and what you found">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false">
+          <path d="M5 4.5h10.5a2 2 0 0 1 2 2v13H7a2 2 0 0 1-2-2Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+          <path d="M5 17.5a2 2 0 0 1 2-2h10.5M8.5 8.5h6M8.5 11.5h4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none"/>
+        </svg>
+      </button>
     </nav>
 
     <section class="hud-info" aria-label="Status">
       <p id="player-status" class="hud-status"></p>
+      <p id="health-status" class="hud-status hud-status--health" role="meter" aria-label="Health"
+         aria-valuemin="0"></p>
       <div class="hud-clock">
         <p id="clock-status" class="hud-status hud-status--clock" aria-live="polite"></p>
         <button type="button" id="wait-button" class="hud-button hud-button--small"
                 title="Wait: let one turn pass where you stand">Wait</button>
       </div>
-      <p id="inventory-status" class="hud-status hud-status--inventory" aria-label="Carried resources"></p>
+      <div class="hud-inventory">
+        <p id="inventory-status" class="hud-status hud-status--inventory" aria-label="Carried items"></p>
+        <button type="button" id="pack-button" class="hud-button hud-button--small" aria-haspopup="dialog"
+                title="Pack: what you carry and wear; use and equip items">Pack</button>
+      </div>
     </section>
 
     <div class="hud-bottom">
-      <div id="gather-actions" class="hud-gather" role="group" aria-label="Gather" hidden></div>
+      <div id="context-actions" class="hud-actions-row" role="group" aria-label="Actions here" hidden></div>
       <p id="selection-readout" class="hud-readout" aria-live="polite"></p>
     </div>
 
@@ -94,10 +107,50 @@
         <li><span class="map-key map-key--remembered"></span>Remembered</li>
         <li><span class="map-key map-key--you"></span>You</li>
         <li><span class="map-key map-key--resource"></span>Resource</li>
+        <li><span class="map-key map-key--poi"></span>Place</li>
       </ul>
       <p class="world-dialog__note">Tap a mapped hex to look at it.</p>
       <div class="world-dialog__actions">
         <button type="submit" id="map-close" class="hud-button">Close</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="journal-dialog" class="world-dialog journal-dialog" aria-labelledby="journal-dialog-title">
+    <form class="world-dialog__form" method="dialog">
+      <h2 id="journal-dialog-title">Journal</h2>
+      <p id="journal-summary" class="world-dialog__current"></p>
+      <ol id="journal-list" class="journal-list" reversed></ol>
+      <p class="world-dialog__note">Newest first. Tap an entry to look at that place.</p>
+      <div class="world-dialog__actions">
+        <button type="submit" id="journal-close" class="hud-button">Close</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="pack-dialog" class="world-dialog pack-dialog" aria-labelledby="pack-dialog-title">
+    <form class="world-dialog__form" method="dialog">
+      <h2 id="pack-dialog-title">Pack</h2>
+      <p id="pack-stats" class="world-dialog__current"></p>
+      <h3 class="pack-heading">Worn</h3>
+      <ul id="pack-slots" class="pack-list"></ul>
+      <h3 class="pack-heading">Carried</h3>
+      <ul id="pack-list" class="pack-list pack-list--items"></ul>
+      <p id="pack-message" class="pack-message" aria-live="polite"></p>
+      <p class="world-dialog__note">Using or equipping an item takes one turn; enemies act after it.</p>
+      <div class="world-dialog__actions">
+        <button type="submit" id="pack-close" class="hud-button">Close</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="defeat-dialog" class="world-dialog defeat-dialog" aria-labelledby="defeat-dialog-title">
+    <form class="world-dialog__form" method="dialog">
+      <h2 id="defeat-dialog-title">Defeated</h2>
+      <p id="defeat-text" class="world-dialog__current"></p>
+      <p class="world-dialog__note">Enemies that were hunting you have lost your trail.</p>
+      <div class="world-dialog__actions">
+        <button type="submit" id="defeat-close" class="hud-button hud-button--primary">Wake at the sanctuary</button>
       </div>
     </form>
   </dialog>

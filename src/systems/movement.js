@@ -28,7 +28,11 @@ export function moveCostFn(world) {
  * With `knows` (map memory's isKnown), routes cross only hexes the player
  * has mapped, and an unmapped destination is 'unexplored'. Planning then
  * never reads hidden terrain, so a preview cannot leak what fog conceals.
- * @param {{ knows?: ((h: {q:number,r:number}) => boolean) | null }} [opts]
+ * With `avoid` (hexes held by enemies the player can see), routes go
+ * around those hexes; they are planned around where enemies are now, and
+ * each step is re-validated as it is walked.
+ * @param {{ knows?: ((h: {q:number,r:number}) => boolean) | null,
+ *   avoid?: ((h: {q:number,r:number}) => boolean) | null }} [opts]
  * @returns {{ status: 'here' }
  *   | { status: 'outside' }
  *   | { status: 'unexplored' }
@@ -37,13 +41,13 @@ export function moveCostFn(world) {
  *   | { status: 'ok', path: Array<{q:number,r:number}>, cost: number }}
  *   `path` excludes the starting hex, so `path.length` is the number of steps.
  */
-export function planRoute(world, from, to, { knows = null } = {}) {
+export function planRoute(world, from, to, { knows = null, avoid = null } = {}) {
   if (!world.has(to)) return { status: 'outside' };
   if (hexDistance(from, to) === 0) return { status: 'here' };
   if (knows && !knows(to)) return { status: 'unexplored' };
   if (!world.isWalkable(to)) return { status: 'impassable' };
   const cost = moveCostFn(world);
-  const costOf = knows ? (h) => (knows(h) ? cost(h) : Infinity) : cost;
+  const costOf = (h) => ((knows && !knows(h)) || (avoid && avoid(h)) ? Infinity : cost(h));
   const result = findPath(from, to, { costOf });
   if (!result.found) return { status: 'unreachable' };
   return { status: 'ok', path: result.path.slice(1), cost: result.cost };

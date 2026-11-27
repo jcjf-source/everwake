@@ -37,8 +37,21 @@ async function boot() {
     clockText,
     { timeOf },
     { createMapPanel },
-    { nodeState, gatherOptions },
+    { nodeState },
     gatherText,
+    { poiState },
+    poiText,
+    { createJournalPanel },
+    { enemyIntent },
+    enemyText,
+    { ENEMY_TYPES },
+    combat,
+    combatText,
+    { createDefeatPanel },
+    contextActions,
+    { inventoryView },
+    itemText,
+    { createInventoryPanel },
   ] = await Promise.all([
     import('./render/canvasSurface.js'),
     import('./render/camera.js'),
@@ -61,6 +74,19 @@ async function boot() {
     import('./ui/mapPanel.js'),
     import('./systems/gathering.js'),
     import('./ui/gatherText.js'),
+    import('./systems/pois.js'),
+    import('./ui/poiText.js'),
+    import('./ui/journalPanel.js'),
+    import('./systems/enemies.js'),
+    import('./ui/enemyText.js'),
+    import('./data/enemies.js'),
+    import('./systems/combat.js'),
+    import('./ui/combatText.js'),
+    import('./ui/defeatPanel.js'),
+    import('./ui/contextActions.js'),
+    import('./systems/items.js'),
+    import('./ui/itemText.js'),
+    import('./ui/inventoryPanel.js'),
   ]);
 
   const canvas = document.getElementById('world-canvas');
@@ -81,8 +107,8 @@ async function boot() {
 
   // Game state (core/game.js): the world, the player (expedition state:
   // position and inventory), map memory (player persistent state: only
-  // known/unknown is saved, Task 13), world changes (gathered nodes), the
-  // world clock and the log. `world`, `player` and `memory` are
+  // known/unknown is saved, Task 13), world changes (gathered nodes, used
+  // POIs), the journal (discoveries), the world clock and the log. `world`, `player` and `memory` are
   // shorthands for the current game's parts, not separate state.
   let game, world, player, memory;
   function useGame(next) {
@@ -93,9 +119,11 @@ async function boot() {
   writeSeedToUrl(world.seed);
 
   // Every player action goes through this pipeline: validate, apply, advance
-  // the clock, reactions (enemies/environment from Task 09), visibility, log,
+  // the clock, reactions (enemies, systems/enemies.js), visibility, log,
   // save (Task 13). Invalid actions cost no turn; nothing happens while idle.
-  const turns = createTurnSystem({ reactions: [], onSave: null });
+  // Reactions: the enemies (with real blows), then the player's condition
+  // (defeat at 0 health, recovery on sanctuary ground): systems/combat.js.
+  const turns = createTurnSystem({ reactions: combat.createCombatReactions(), onSave: null });
 
   // UI/view state only: nothing here is game/world state and none is saved.
   // `preview` is a planned route awaiting confirmation; `noWay` marks a hex
@@ -114,18 +142,32 @@ async function boot() {
   // Resource nodes as the player knows them: only on mapped hexes.
   const nodeInfo = (h) => (h && memory.isKnown(h) ? nodeState(game, h) : null);
   const liveNodeAt = (h) => { const s = nodeInfo(h); return s && s.left > 0 ? s : null; };
-  const noteFor = (h) => gatherText.nodeNote(nodeInfo(h));
-  // Nodes in reach right now (none while travelling: a tap stops travel first).
-  const currentGatherOptions = () => (travel.active ? [] : gatherOptions(game));
+  // Points of interest likewise: a mapped POI is a discovered one.
+  const poiInfo = (h) => (h && memory.isKnown(h) ? poiState(game, h) : null);
+  // Enemies are mobile: known only while their hex is in sight.
+  const enemyInfo = (h) => (h && memory.isVisible(h) ? game.enemies.at(h) : null);
+  const enemyNoteFor = (h) => { const e = enemyInfo(h); return e ? enemyText.enemyNote(e, enemyIntent(game, e)) : ''; };
+  const noteFor = (h) => gatherText.nodeNote(nodeInfo(h)) + poiText.poiNote(poiInfo(h)) + enemyNoteFor(h);
+  /** Enemies in sight, as the renderer draws them. */
+  const visibleEnemies = () => game.enemies.list
+    .filter((e) => e.health > 0 && memory.isVisible(e.position))
+    .map((e) => ({ position: e.position, type: e.type, health: e.health, maxHealth: ENEMY_TYPES[e.type].health, intent: enemyIntent(game, e) }));
+  // What can be done right here (ui/contextActions.js): combat, consumables,
+  // POIs, then resource nodes in reach; nothing while travelling.
+  const contextOptions = () => contextActions.contextOptions(game, { travelling: travel.active });
+  const { buttonFor, actionFor } = contextActions;
 
   // Events (e.g. a new day part) from the most recent successful action,
   // appended to the readout that describes that action.
   let lastEvents = [];
+  // A defeat from the most recent action, handled on the next refresh.
+  let pendingDefeat = null;
 
   /** Perform one action through the turn pipeline. */
   function act(action) {
     const result = turns.perform(game, action);
     lastEvents = result.ok ? result.events : [];
+    pendingDefeat = lastEvents.find((e) => e.type === 'defeated') ?? pendingDefeat;
     return result;
   }
 
@@ -143,6 +185,7 @@ async function boot() {
       let route = null;
       if (travel.active) route = { path: travel.remaining, mode: 'travel' };
       else if (ui.preview) route = { path: ui.preview.path, mode: 'preview' };
+      const options = contextOptions();
       drawGrid(ctx, {
         width, height, view, cells,
         has: world.has,
@@ -150,12 +193,15 @@ async function boot() {
         sanctuary: world.sanctuary,
         ui,
         player: player.position,
-        stepRim: travel.active ? [] : hexNeighbors(player.position).filter(world.isWalkable),
+        stepRim: travel.active ? [] : hexNeighbors(player.position).filter((h) => world.isWalkable(h) && !enemyInfo(h)),
         route,
         noWay: ui.noWay,
         fog: memory,
         nodeAt: nodeInfo,
-        gatherable: currentGatherOptions().map((o) => o.at),
+        poiAt: poiInfo,
+        gatherable: options.filter((x) => x.kind === 'gather').map((x) => x.o.at),
+        usable: options.filter((x) => x.kind === 'interact').map((x) => x.o.at),
+        enemies: visibleEnemies(),
       });
     },
     report,
@@ -206,17 +252,36 @@ async function boot() {
     }
   }
 
+  /**
+   * After a defeat the game has already carried the player home (systems/
+   * combat.js): drop any route, say what happened, look at the sanctuary and
+   * show the notice.
+   */
+  function showDefeat(e) {
+    Object.assign(ui, { preview: null, travelTarget: null, selected: null, noWay: null });
+    if (inventoryPanel.isOpen) inventoryPanel.close();
+    readoutText = clockText.describeEvents(lastEvents.includes(e) ? lastEvents : [e]);
+    updateCamera(camera.centerOnHex(cam, player.position));
+    defeatPanel.show(combatText.describeDefeat(e));
+  }
+
   function refresh() {
+    if (pendingDefeat) {
+      const e = pendingDefeat;
+      pendingDefeat = null;
+      showDefeat(e);
+    }
     hud.showReadout(readoutText);
     hud.showStatus(text.describePlayer(player));
+    hud.showHealth(combatText.describeHealth(player.health, player.maxHealth), player.health, player.maxHealth);
     hud.showClock(clockText.describeClock(game.clock.turn), timeOf(game.clock.turn).part);
     hud.setWaitEnabled(!travel.active);
-    hud.showInventory(gatherText.inventoryEntries(player.inventory));
-    hud.showGather(currentGatherOptions().map((o) => ({
-      key: `${o.at.q},${o.at.r}`, resource: o.node.resource, ...gatherText.gatherButton(o),
-    })));
+    hud.showInventory(itemText.inventoryEntries(player.inventory));
+    hud.showActions(contextOptions().map(buttonFor));
     surface.requestRepaint();
     mapPanel.refresh();
+    journalPanel.refresh();
+    inventoryPanel.refresh();
   }
 
   function onTravelEvent(e) {
@@ -232,7 +297,7 @@ async function boot() {
     } else if (e.type === 'stopped' || e.type === 'interrupted') {
       // Keep the rest of the route as a preview: tapping the destination (or
       // the node it leads to) resumes.
-      const rest = planRoute(world, player.position, e.destination, { knows: memory.isKnown });
+      const rest = planRoute(world, player.position, e.destination, { knows: memory.isKnown, avoid: enemyInfo });
       const target = ui.travelTarget;
       ui.travelTarget = null;
       ui.preview = rest.status === 'ok'
@@ -247,7 +312,8 @@ async function boot() {
       ui.travelTarget = null;
       ui.noWay = e.at;
       ui.selected = e.at;
-      readoutText = text.describeBlocked(e.at, e.done);
+      const blocker = e.reason === 'occupied' ? game.enemies.at(e.at) : null;
+      readoutText = blocker ? enemyText.describeRouteBlockedBy(e.at, blocker, e.done) : text.describeBlocked(e.at, e.done);
     }
     if (e.type !== 'stopped') followPlayer();
     refresh();
@@ -270,9 +336,9 @@ async function boot() {
         ui.preview = null;
         ui.selected = null;
         const result = act({ type: 'move', to: action.to });
-        readoutText = result.ok
-          ? clockText.withEvents(text.describeStepped(labelOf(action.to)) + noteFor(action.to), lastEvents)
-          : text.describeImpassable(labelOf(action.to));
+        if (result.ok) readoutText = clockText.withEvents(text.describeStepped(labelOf(action.to)) + noteFor(action.to), lastEvents);
+        else if (result.reason === 'occupied') readoutText = enemyText.describeOccupied(labelOf(action.to), game.enemies.at(action.to));
+        else readoutText = text.describeImpassable(labelOf(action.to));
         if (result.ok) followPlayer();
         break;
       }
@@ -318,6 +384,14 @@ async function boot() {
         ui.selected = action.at;
         readoutText = text.describeUnexplored(action.at);
         break;
+      case 'enemy': {
+        // Inspect only (no turn): fighting is done with the Attack button.
+        const foe = enemyInfo(action.at);
+        ui.preview = null;
+        ui.selected = action.at;
+        readoutText = enemyText.describeEnemyHex(labelOf(action.at), foe, enemyIntent(game, foe));
+        break;
+      }
       case 'impassable':
       case 'unreachable':
         ui.preview = null;
@@ -335,7 +409,7 @@ async function boot() {
       world,
       {
         position: player.position, preview: ui.preview, travelling: travel.destination,
-        travelTarget: ui.travelTarget, knows: memory.isKnown, nodeAt: liveNodeAt,
+        travelTarget: ui.travelTarget, knows: memory.isKnown, nodeAt: liveNodeAt, enemyAt: enemyInfo,
       },
       h,
     );
@@ -355,7 +429,8 @@ async function boot() {
       clock: document.getElementById('clock-status'),
       wait: document.getElementById('wait-button'),
       inventory: document.getElementById('inventory-status'),
-      gather: document.getElementById('gather-actions'),
+      health: document.getElementById('health-status'),
+      actions: document.getElementById('context-actions'),
     },
     {
       onToggleCoords(on) {
@@ -378,18 +453,21 @@ async function boot() {
         }
         refresh();
       },
-      onGather(index) {
+      onAction(index) {
         // Buttons are rebuilt on every refresh, so `index` names a current
         // option; the action is still validated by the turn pipeline.
-        const option = currentGatherOptions()[index];
+        const option = contextOptions()[index];
         if (!option) return;
-        const result = act({ type: 'gather', at: option.at });
+        const { kind, o } = option;
+        const result = act(actionFor(option));
         ui.preview = null;
         ui.noWay = null;
-        ui.selected = option.at;
-        readoutText = result.ok
-          ? clockText.describeEvents(lastEvents)
-          : gatherText.describeGatherRefused(result.reason, labelOf(option.at));
+        ui.selected = o.at ?? null;
+        if (result.ok) readoutText = clockText.describeEvents(lastEvents);
+        else if (kind === 'gather') readoutText = gatherText.describeGatherRefused(result.reason, labelOf(o.at));
+        else if (kind === 'interact') readoutText = poiText.describeInteractRefused(result.reason, labelOf(o.at));
+        else readoutText = combatText.describeCombatRefused(kind, result.reason, o.at && kind === 'attack' ? labelOf(o.at) : '');
+        if (result.ok && kind === 'flee') followPlayer();
         refresh();
       },
     },
@@ -414,6 +492,7 @@ async function boot() {
         writeSeedToUrl(world.seed);
         worldPanel.showSeed(world.seed);
         Object.assign(ui, { selected: null, hovered: null, preview: null, noWay: null, travelTarget: null });
+        pendingDefeat = null;
         readoutText = text.MOVE_HINT;
         refresh();
         updateCamera(camera.centerOnHex(cam, player.position));
@@ -442,6 +521,7 @@ async function boot() {
           player: player.position,
           fog: memory,
           nodeAt: nodeInfo,
+          poiAt: poiInfo,
         });
         return view;
       },
@@ -459,6 +539,61 @@ async function boot() {
       },
     },
     report,
+  );
+
+  // Journal: places discovered and what came of them; tap one to look there.
+  // Defeat notice (Task 12 turns it into the expedition report).
+  const defeatPanel = createDefeatPanel({
+    dialog: document.getElementById('defeat-dialog'),
+    text: document.getElementById('defeat-text'),
+  });
+
+  const journalPanel = createJournalPanel(
+    {
+      button: document.getElementById('journal-button'),
+      dialog: document.getElementById('journal-dialog'),
+      list: document.getElementById('journal-list'),
+      summary: document.getElementById('journal-summary'),
+    },
+    {
+      entries: () => game.journal.entries,
+      // As with the map, travel would carry on behind the modal: stop it.
+      onOpen: () => travel.stop(),
+      onPick(h) {
+        ui.preview = null;
+        ui.noWay = null;
+        ui.selected = h;
+        readoutText = describeSelection(h, terrainOf(h), world.sanctuary) + noteFor(h);
+        refresh();
+        updateCamera(camera.centerOnHex(cam, h));
+      },
+    },
+  );
+
+  // Pack: what is carried and worn. Every button is one action through the
+  // pipeline (a turn, then the enemies); the dialog stays open and shows the outcome.
+  const inventoryPanel = createInventoryPanel(
+    {
+      button: document.getElementById('pack-button'),
+      dialog: document.getElementById('pack-dialog'),
+      stats: document.getElementById('pack-stats'),
+      slots: document.getElementById('pack-slots'),
+      list: document.getElementById('pack-list'),
+      message: document.getElementById('pack-message'),
+    },
+    {
+      view: () => inventoryView(game),
+      // As with the map, travel would carry on behind the modal: stop it.
+      onOpen: () => travel.stop(),
+      onAction(action) {
+        const result = act(action);
+        ui.noWay = null;
+        readoutText = result.ok ? clockText.describeEvents(lastEvents) : itemText.describeItemRefused(action.type, result.reason);
+        const shown = readoutText;
+        refresh(); // a defeat closes the dialog and rewrites the readout
+        return shown;
+      },
+    },
   );
 
   worldPanel.showSeed(world.seed);
