@@ -5,6 +5,27 @@ This file records notable project changes. It begins as a documentation scaffold
 
 ## Unreleased
 
+### Task 05: Fog of war and map memory
+- The world starts hidden. Only hexes within 4 steps of you (hex distance) are revealed at the start, and each step reveals the hexes that come into sight.
+- Every hex is unknown, remembered or visible. Unknown hexes are not drawn at all, so neither their terrain nor anything on them shows. Hexes you have seen but are no longer in sight stay mapped under a dim veil, and hexes in sight are drawn in full.
+- Soft banks of mist sit along the edge of the explored area, spilling about half a hex over it, with a fainter ring behind. The map fades into cloud instead of ending in hard hexagon edges. The clouds don't move, stay put while panning, and depend only on which hexes are mapped, so they reveal nothing.
+- The sanctuary, and later points of interest, appear only once their hex has been seen, and stay on the map after that. Moving things (enemies, Task 09) will be shown only while in sight; that rule is in place and tested.
+- Routes only cross mapped hexes, so a route preview never reveals hidden terrain. Tapping an unmapped hex says "Unexplored · … · not on your map yet" without naming its terrain. A mapped hex that can only be reached through unmapped land is reported as cut off ("…by water, mountains or unmapped land").
+- New **Map** button (below Centre) opens an overview of everything you have mapped, fitted to the explored area. It shows what is in sight, what is remembered, you, and the sanctuary, with a count of hexes explored. Tap a mapped hex to close the map and centre the view on it. Opening the map stops travel; one tap on the destination resumes.
+- Map knowledge is stored as player state with a compact, versioned save form (a bitset of known hexes, about 820 characters for the full map) and validated restore, ready for persistence (Task 13). It is not saved yet: reloading starts a fresh map.
+- Tests: reveal boundary (ring 4 seen, ring 5 not), reveal on movement, memory kept, map-edge clipping, landmark versus moving-entity visibility, save round trip and malformed saves, fog-aware routes and taps, a generated-world walk, the map framing, and the renderer drawing only known hexes and veiling remembered ones (125 tests total, including where the fog-edge clouds are placed). The browser check now mirrors map memory. It checks the reveal boundary by tapping, reveal on a step, pixel brightness going unknown → visible → remembered, and the Map dialog, on four viewports.
+
+### Task 04: Tap-to-move and hex pathfinding
+- The player now starts on the sanctuary, drawn as a hooded wanderer with a lantern (a ringed token when zoomed out). A status line under the title shows your position and move count.
+- Tap a neighbouring walkable hex to step onto it at once. Those hexes have a faint rim.
+- Tap a farther hex to preview a route: a dashed line to a ringed destination, with step count and terrain cost in the readout. Tap the same hex again to travel. You move one hex every 150 ms and never jump; the camera recentres when you near the edge of the view.
+- Tapping during travel stops it. Tap the destination again to resume the rest of the route, or tap another hex to plan a new one. **Escape** stops travel, or clears a planned route.
+- Impassable hexes (mountains, deep water) and walkable hexes cut off from you get a red cross and an explanation. Nothing moves and no move is counted.
+- Each step is validated (on the map, adjacent, walkable). A route that becomes blocked stops at the last good hex.
+- Added hex A* (`src/world/pathfinding.js`): terrain move costs as weights, impassable tiles excluded, hex-distance heuristic, deterministic tie-breaking.
+- The **Centre** button now recentres on the player. The Task 01 gold rim around the selected hex's neighbours is replaced by the rim around hexes you can step to.
+- Tests: hand-drawn small maps (detours, terrain-cost choices, enclosed goals, deep vs shallow water), A* checked against Dijkstra on 150 random maps, generated-world routes checked against flood fill, plus step validation, travel (stop, retarget, blocked mid-route) and tap handling (113 tests total). The browser check now covers stepping, previewing, stepwise travel, interrupt/resume, retargeting, Escape, and impassable/unreachable feedback on four viewports.
+
 ### Task 03: Deterministic terrain generation
 - Added a seeded PRNG and coordinate hash (`src/core/rng.js`), seeded gradient noise (`src/world/noise.js`), and seed handling (`src/world/seed.js`: validation, normalisation, memorable random seeds such as `misty-tarn-417`).
 - Added terrain definitions (`src/data/terrain.js`): deep and shallow water, sand, grassland, forest, dense forest, hills, rocky ground, and mountains. Each has walkability, a move cost, a sight modifier, whether it blocks sight, and wood/stone/herbs/food suitability, and a validator checks them.

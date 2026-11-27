@@ -54,3 +54,32 @@ export function visibleHexes(view, width, height, include, padding = 1) {
   }
   return out;
 }
+
+/**
+ * A view that fits every hex in `hexes` inside a width x height box, with
+ * `margin` CSS pixels clear on each side, centred. The hex size is capped
+ * at `maxSize` so a small explored area is not blown up to fill the box.
+ * Used by the map overview.
+ * @param {Array<{q:number,r:number}>} hexes non-empty
+ * @returns {GridView}
+ */
+export function fitView(hexes, width, height, { margin = 12, maxSize = 10, minSize = 0.5 } = {}) {
+  let minX = Infinity; let maxX = -Infinity; let minY = Infinity; let maxY = -Infinity;
+  for (const h of hexes) {
+    const p = hexToPixel(h, 1);
+    if (p.x < minX) minX = p.x;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.y > maxY) maxY = p.y;
+  }
+  // Unit-size extents plus one hex's half-width / half-height on each side.
+  const spanX = maxX - minX + SQRT3;
+  const spanY = maxY - minY + 2;
+  const fit = Math.min((width - 2 * margin) / spanX, (height - 2 * margin) / spanY);
+  const size = Math.max(minSize, Math.min(maxSize, fit));
+  return {
+    originX: width / 2 - ((minX + maxX) / 2) * size,
+    originY: height / 2 - ((minY + maxY) / 2) * size,
+    size,
+  };
+}

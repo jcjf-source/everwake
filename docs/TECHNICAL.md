@@ -19,7 +19,7 @@ This document records implementation decisions. Decisions may evolve, but change
 - `src/data/`: terrain, items, enemy definitions, upgrade definitions.
 Names are suggestions; keep structure simple and consistent with the actual project.
 
-## Current project layout (Tasks 00–03)
+## Current project layout (Tasks 00–05)
 - `index.html` at the repository root is the entry point; `css/main.css` holds styles; `src/main.js` boots the app.
 - `src/main.js` statically imports only `src/core/errorReporter.js`, then loads everything else with dynamic `import()`. That way a failure in any later module still appears on screen.
 - `src/render/canvasSurface.js` sizes the canvas to its CSS box at `devicePixelRatio` (capped at 3) and sets the context transform so drawing uses CSS pixels. It repaints on resize and when `requestRepaint()` is called (at most once per animation frame). There is no continuous loop. `getSize()` returns the canvas box in CSS pixels.
@@ -45,8 +45,8 @@ Names are suggestions; keep structure simple and consistent with the actual proj
   - **Wheel:** zooms about the cursor (line and page delta modes are normalised, and `ctrlKey` trackpad pinch is more sensitive). It always calls `preventDefault()` (non-passive listener), and Safari `gesture*` events are also prevented.
 - `src/ui/hud.js`: the selection readout, the Coordinates toggle (`aria-pressed`), and the + / − / Centre buttons.
   - Zoom buttons step ×1.25 about the viewport centre and are disabled at the zoom limits.
-  - Centre recentres on the selected hex, or on the sanctuary if nothing is selected.
-  - The readout shows terrain name, move cost or "impassable", and hex distance from the sanctuary.
+  - Centre recentres on the player (Task 04; previously the selected hex or the sanctuary).
+  - The readout is the single feedback line: the movement hint, the inspected hex, the route preview, travel progress, or why a hex cannot be reached. `#player-status` shows position and move count.
 - `src/ui/worldPanel.js`: the Seed button and a `<dialog>` for a new world (typed or Random seed, Cancel, Replace world). Replacing is a deliberate second step, never a single tap. The seed lives in the URL query (`?seed=`) until persistence exists (Task 13). An invalid or missing URL seed falls back to a random seed.
 - UI and view state (`hovered`, `selected`, `showCoords`, camera) live in `main.js`. They are not game state and are not saved. The current `world` object is replaced as a whole when a new seed is chosen.
 - The Task 00 placeholder title scene (`placeholderScene.js`) was removed in Task 01 now that the grid is the main view.
@@ -54,6 +54,66 @@ Names are suggestions; keep structure simple and consistent with the actual proj
 - `.app` uses `touch-action: none`, and `html, body` use `overflow: hidden`, so the play area doesn't scroll or zoom the page.
 - Tooling: `npm start` runs `tools/serve.mjs`, a zero-dependency static server (ES modules can't load from `file://`). `npm test` runs `node --test`. There is no build step, and `package.json` has no dependencies.
 - GitHub Pages: the repository root is served as-is. All asset paths are relative, and `.nojekyll` turns off Jekyll processing.
+
+## Movement and pathfinding (Task 04)
+- **Pathfinding** (`src/world/pathfinding.js`): `findPath(start, goal, { costOf, minCost, maxExpanded })` is a pure A* over the hex grid.
+  - `costOf(h)` is the cost of *entering* `h`. Anything other than a finite number ≥ 1 is impassable, which also covers hexes off the map.
+  - The heuristic is hex distance × `minCost` (1), so routes are optimal.
+  - It uses a binary heap ordered by (f, h, insertion order), so results are deterministic.
+  - It returns `{ found, path (start…goal), cost }`, or a `reason`: `blocked` (goal impassable), `unreachable`, or `limit` (the `maxExpanded` cap; kept for an unbounded world later).
+  - A failed search on the radius-40 map explores at most the start's region, which takes a few ms.
+- **Player** (`src/entities/player.js`): `{ position, moves }` is expedition state. `moves` is a placeholder action counter, one per hex entered, until the turn system (Task 06). It is not saved yet.
+- **Rules** (`src/systems/movement.js`):
+  - `planRoute(world, from, to)` returns `here | outside | impassable | unreachable | ok`; the `ok` path excludes the start.
+  - `tryStep(player, world, to)` is the only movement state change. It checks the target is on the map, adjacent, and walkable. A rejected step changes nothing.
+  - **Turn cost (decision for Task 06):** terrain `moveCost` currently only weights route choice. Each hex entered counts as one move, as the task specifies. This differs from the comment in `terrain.js` ("turns to enter the tile"); Task 06 should decide whether rough terrain costs extra turns.
+- **Travel** (`src/systems/travel.js`): `createTravel({ step, onEvent, delay, schedule, cancel })` walks a path by calling `step` once per hex.
+  - The first step happens immediately, then one every `STEP_DELAY_MS` (150 ms). The delay is presentation pacing only; nothing runs while idle, and no timer survives the end of travel.
+  - Events: `step`, `arrived`, `stopped`, `blocked` (a re-validated step failed).
+  - `stop()` interrupts between steps, and `start()` silently replaces an active route.
+  - The timer is injectable, so tests drive it deterministically.
+  - Task 06 should route each step through the action pipeline, so encounters can interrupt travel through the same `stop()`.
+- **Tap intent** (`src/ui/moveIntent.js`): `decideTap(world, { position, preview, travelling }, hex)` is pure and returns `{ stop, action }`.
+  - Idle taps:
+    - your own hex: inspect it;
+    - a walkable neighbour: step;
+    - a farther hex: preview the route;
+    - the previewed destination again: travel;
+    - an impassable or unreachable hex: explain why;
+    - off the map: clear.
+  - While travelling, any tap stops first. Tapping yourself, the destination, or empty space only stops; other hexes are then handled as idle taps (retarget).
+  - Distant moves always need a confirming second tap, on mouse and touch alike. There is no hover preview, because touch has no hover.
+  - After a stop, the rest of the route stays previewed, so one tap resumes.
+- **UI state** (`main.js`): `ui.preview`, `ui.noWay` and `ui.selected` are view state and are not saved. Readout strings come from `src/ui/travelText.js`, which the browser check mirrors.
+  - **Camera follow:** after each step, the camera recentres if the player is within max(2 hexes, 18%) of a viewport edge.
+  - **Centre** recentres on the player.
+  - **Escape** acts like tapping empty space.
+- **Fog (Task 05):** tap intent and route planning take map memory's `isKnown` (see "Fog of war and map memory").
+- **Rendering:** `src/render/entityArt.js` draws the step rim, the route (dashed, pale for a preview and gold while travelling, with a dark underlay), the red "no way" cross, and the player. Overlay draw order: terrain, details, sanctuary, step rim, hover, selection, route, cross, player, labels, vignette.
+
+## Fog of war and map memory (Task 05)
+- **Storage** (`src/world/mapMemory.js`): `createMapMemory(radius)` keeps one byte per hex in the same dense layout as `world.js`: `FOG.UNKNOWN`, `REMEMBERED` or `VISIBLE`.
+  - `observe(center, sightRadius = SIGHT_RADIUS)` demotes the previous visible set to remembered and marks every map hex within `sightRadius` (hex distance, `hexesInRange`) visible. It returns how many hexes were seen for the first time. `SIGHT_RADIUS` is 4.
+  - It also offers `stateAt`, `isKnown`, `isVisible`, `knownCount`, `totalCount`, and `knownHexes()` (row order).
+  - Sight is a plain radius: no line of sight. Terrain `sightModifier`/`blocksSight`, time of day and the Cartographer upgrade are later modifiers to the radius or to the observed set; storage does not change.
+- **State model:** map memory is *player persistent state* (it survives death; see "State model"). `main.js` holds it beside `world` and `player` and replaces it when a new world is created.
+  - `serialize()` returns `{ version: 1, radius, known }`, where `known` is a base64 bitset of known hexes in row order. Visibility is not saved; it is recomputed with `observe(player.position)` after loading.
+  - `restoreMapMemory(data, radius)` returns `{ ok, memory }` or `{ ok: false, error }` for a wrong version, a radius mismatch, bad base64 or a wrong length, and never half-applies. Nothing calls it yet (Task 13).
+- **Update point:** `main.js` `stepPlayer` is the only way the player moves (single taps and every travel step): `tryStep`, then `observe` on success. A rejected step reveals nothing. In the Task 06 pipeline this is the "update visibility" stage.
+- **Entities:** `canSee(memory, { at, kind })`: a `landmark` (sanctuary, POIs) is shown once its hex is known; a `mobile` entity (enemies) only while its hex is visible. The renderer uses it for the sanctuary; Task 09 should use it for enemies and for any enemy readouts.
+- **No leaks through movement:** `planRoute(world, from, to, { knows })` treats unknown hexes as impassable and returns `unexplored` for an unknown destination before it checks walkability. `decideTap` takes `knows` in its state and returns `{ kind: 'unexplored', at }`. Neighbours are always within sight, so single steps are unaffected. A known hex reachable only through unknown land reads as "cut off" until more is mapped.
+- **Rendering** (`gridRenderer.js`, `frame.fog`): unknown hexes are skipped entirely, so only the background shows, and hidden terrain cannot be inferred from colour or outline. Remembered hexes get one batched veil (`REMEMBERED_VEIL`) drawn over terrain, details and the sanctuary. Overlays (route, player, highlights) are drawn above the veil. Without `frame.fog`, everything is drawn as visible.
+- **Fog edge** (`src/render/fogArt.js`, drawn by `drawGrid` after the veil and before overlays):
+  - `fogFrontier(cells, stateAt)` finds the unknown on-screen hexes next to known ones (`edge`, with the summed direction back toward the map) and the ring after them (`outer`). It works outward from the known cells, so a mostly unexplored screen stays cheap.
+  - Four cloud sprites (soft radial blobs on a 128px offscreen canvas) are built once and stamped with `drawImage`: two puffs per edge hex, pushed toward the map so they spill about half a hex over it, and one faint puff per outer hex. Offsets, sizes and sprite choice come from coordinate hashes, so the clouds are static and stable.
+  - Clouds are skipped below a 6px hex size, and where no canvas API exists (Node tests).
+  - Placement depends only on knowledge, never on hidden terrain.
+  - Drag cost at minimum zoom is about 0.45–0.65 ms script per frame (before the clouds: about 0.3).
+- **Map dialog** (`src/ui/mapPanel.js`, `#map-button` in the view-control stack): an overview canvas drawn by the same `drawGrid`, with a view from `fitView(memory.knownHexes(), w, h, { maxSize: 16 })` (`gridView.js`; fits the explored area, capped so a small area is not blown up).
+  - Tapping a known hex closes the dialog, selects that hex and centres the camera on it. Unknown hexes ignore taps.
+  - Opening the map stops travel, because travel steps are timed and would otherwise continue behind the modal.
+  - Below 500px viewport height the dialog drops its title and note so it fits without scrolling.
+- **Cost:** a per-hex byte lookup while drawing, plus the fog edge (see above).
 
 ## Hex grid
 - Use axial coordinates `(q, r)`; derive the third cube coordinate `s = -q-r` when needed.
@@ -124,7 +184,7 @@ Actions should be explicit and validated. Suggested pipeline: validate action �
 - Unit tests for hex geometry, coordinate conversions, distance, neighbors, deterministic generation, and pathfinding.
 - Integration/manual checks for movement, action turn costs, fog updates, encounter interruption, death return, and persistence across reload.
 - Avoid brittle tests tied to exact visual pixels unless rendering tests are available.
-- Browser checks live in `tools/browser/` (Node 22+, Chrome). `check-world.mjs` (`npm run check:browser`) taps predicted hexes in headless Chrome across four viewports. It computes the expected readout in Node from the same pure modules, so it must be updated when the readout or UI flows change. `perf.mjs` (`npm run perf`) measures drag frame times. Pitfalls are listed at the top of `tools/browser/cdp.mjs`: no `--disable-gpu`, keep taps away from buttons, and DPR-halved wheel deltas.
+- Browser checks live in `tools/browser/` (Node 22+, Chrome). `check-world.mjs` (`npm run check:browser`, `VIEWPORT=<fragment>` for one viewport) taps predicted hexes in headless Chrome across four viewports and drives the movement flows (it reads the player position from `#player-status`; seed `island-133` provides a cut-off islet for the unreachable case). It computes the expected readout in Node from the same pure modules, so it must be updated when the readout or UI flows change. Since Task 05 it also mirrors map memory: it calls `observe` for every hex the player is known to have stood on, and explores toward impassable or unreachable targets before tapping them. `perf.mjs` (`npm run perf`) measures drag frame times. Pitfalls are listed at the top of `tools/browser/cdp.mjs`: no `--disable-gpu`, keep taps away from buttons, and DPR-halved wheel deltas.
 
 ## Decisions log
 - 2026-11-27: Prototype targets static browser hosting; plain JavaScript/Canvas is the default to reduce setup and deployment complexity.
@@ -136,4 +196,6 @@ Actions should be explicit and validated. Suggested pipeline: validate action �
 - 2026-11-27 (Task 00): Tests use Node's built-in `node:test` runner, so there are no test dependencies.
 - 2026-11-27 (Task 02): The camera stores a world-space centre and a zoom level, and works as pure functions. The world unit is fixed at `BASE_HEX_SIZE = 32` (hex pixel space at zoom 1). Zoom is limited to 0.4–2.5. Moves are instant, with no tweening: the camera changes only on input and repaints on demand.
 - 2026-11-27 (Task 03): Terrain is generated per coordinate from continuous seeded noise plus neighbour-local rules, never from sequential random draws, so it is independent of generation or draw order and ready for chunking. Gameplay terrain properties (`src/data/terrain.js`) are kept separate from presentation (`src/render/terrainStyle.js`, `terrainArt.js`). Until saving exists, the world seed is kept in the URL.
+- 2026-11-27 (Task 04): Distant moves need two taps: the first previews and the second travels, the same on touch and mouse. Route following is a timed sequence of individually validated one-hex steps, and the pacing is presentation only. Terrain cost weights routes; each hex counts as one move until Task 06 decides turn costs.
+- 2026-11-27 (Task 05): Fog uses three per-hex states with a plain hex-distance sight radius of 4. Only known/unknown is persisted; visibility is derived from position. Route planning and tap feedback use only mapped hexes, so fog cannot be seen through via previews or error messages. Unknown hexes are not drawn at all. The map view is a dialog that reuses the main renderer, not an always-on minimap, to keep the phone screen clear.
 - 2026-11-27 (Task 01): Pointy-top hex orientation. All geometry lives in `src/world/hex.js`, and the screen transform lives in `src/render/gridView.js`. Hit-testing works in CSS pixels, so device pixel ratio never affects which hex is picked.

@@ -15,8 +15,8 @@ Task files are executed one at a time. Mark a task complete only after its accep
 
 ## Milestone 2 — World and exploration
 - [x] Task 03: Deterministic terrain generation (2026-11-27)
-- [ ] Task 04: Click-to-move and hex A* pathfinding
-- [ ] Task 05: Fog of war and exploration map
+- [x] Task 04: Click-to-move and hex A* pathfinding (2026-11-27)
+- [x] Task 05: Fog of war and exploration map (2026-11-27)
 **Exit criteria:** explore a repeatable map and reveal/remember terrain.
 
 ## Milestone 3 — Turn-based game loop

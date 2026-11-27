@@ -1,17 +1,22 @@
 /**
- * End-to-end browser check of the current build (Tasks 01–03 behaviour):
+ * End-to-end browser check of the current build (Tasks 01–05 behaviour):
  * hex picking at several zoom levels and viewports, terrain readout, the
- * sanctuary, the seed dialog, URL seed retention, Centre, Coords, console
- * cleanliness, and drag frame times.
+ * sanctuary, tap-to-move (step, route preview, stepwise travel, interrupt,
+ * resume, retarget, unreachable feedback), fog of war (reveal boundary,
+ * reveal on movement, dim memory, unexplored taps) and the Map dialog, the
+ * seed dialog, URL seed retention, Centre, Coords, console cleanliness, and
+ * drag frame times.
  *
  * Usage: node tools/browser/check-world.mjs [screenshotDir]
+ * Set VIEWPORT=<name fragment> (e.g. phone-390) to run a single viewport.
  * Starts its own dev server (port 8137) and headless Chrome; see cdp.mjs.
  * Exits non-zero on any failure. Screenshots are written only if a
  * directory is given.
  *
  * The expected readout for each tapped hex is computed in Node from the
  * same pure modules the page uses (camera, gridView, world, hud), mirroring
- * each camera operation the check performs.
+ * each camera operation the check performs. Map memory is mirrored too: the
+ * check reveals sight around every hex the player is seen to stand on.
  */
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -20,11 +25,16 @@ import { startSession, REPO, VIEWPORTS } from './cdp.mjs';
 const shotDir = process.argv[2] ?? null;
 const imp = (p) => import(pathToFileURL(join(REPO, p)).href);
 const C = await imp('src/render/camera.js');
-const { hexToScreen, screenToHex } = await imp('src/render/gridView.js');
-const { hexCorners, hexKey } = await imp('src/world/hex.js');
+const { hexToScreen, screenToHex, fitView } = await imp('src/render/gridView.js');
+const { createMapMemory, SIGHT_RADIUS } = await imp('src/world/mapMemory.js');
+const { coordText } = await imp('src/ui/hud.js');
+const { hexCorners, hexKey, hexDistance, hexEquals, hexNeighbors, hexesInRange } = await imp('src/world/hex.js');
 const { createWorld } = await imp('src/world/world.js');
 const { TERRAIN } = await imp('src/data/terrain.js');
 const { describeSelection } = await imp('src/ui/hud.js');
+const { decideTap } = await imp('src/ui/moveIntent.js');
+const { planRoute } = await imp('src/systems/movement.js');
+const T = await imp('src/ui/travelText.js');
 const R = 40; // must match WORLD_RADIUS in src/main.js
 
 const s = await startSession();
@@ -46,6 +56,8 @@ async function clickEl(sel) {
 }
 
 async function load(url) {
+  const seed = new URL(url).searchParams.get('seed');
+  if (seed) resetMemory(createWorld(seed, R));
   await s.send('Page.navigate', { url });
   for (let i = 0; i < 50; i++) {
     await s.wait(100);
@@ -54,45 +66,419 @@ async function load(url) {
   await frame();
 }
 
-const expectText = (world, h) => {
-  const t = world.tileAt(h);
-  return describeSelection(h, t ? TERRAIN[t.terrain] : null, world.sanctuary);
-};
+/** Node mirror of the page's map memory; reset on every page load. */
+let mem = null;
+const resetMemory = (world) => { mem = createMapMemory(R); mem.observe(world.sanctuary, SIGHT_RADIUS); };
+/** The player stood on each of these hexes, in order. */
+const walked = (hexes) => { for (const h of hexes) mem.observe(h, SIGHT_RADIUS); };
+const knows = (h) => mem.isKnown(h);
+
+const terrainOf = (world, h) => { const t = world.tileAt(h); return t ? TERRAIN[t.terrain] : null; };
+const labelOf = (world, h) => T.placeLabel(h, terrainOf(world, h), world.sanctuary);
+const hereText = (world, pos) => `${describeSelection(pos, terrainOf(world, pos), world.sanctuary)} · you are here`;
+
+/** The readout the page should show after an idle tap on `h` (mirrors main.js applyTapAction). */
+function expectTap(world, pos, h, preview = null) {
+  const { action } = decideTap(world, { position: pos, preview, travelling: null, knows }, h);
+  switch (action.kind) {
+    case 'unexplored': return T.describeUnexplored(h);
+    case 'clear': return T.MOVE_HINT;
+    case 'here': return hereText(world, pos);
+    case 'step': return T.describeStepped(labelOf(world, h));
+    case 'preview': return T.describePreview(labelOf(world, h), action.preview.path.length, action.preview.cost);
+    case 'impassable': return T.describeImpassable(labelOf(world, h));
+    case 'unreachable': return T.describeUnreachable(labelOf(world, h));
+    default: return `(${action.kind})`;
+  }
+}
+
+const num = (x) => Number(x.replace('−', '-'));
+/** Player position and move count, read from the status line. */
+async function playerState() {
+  const m = (await text('player-status')).match(/q (−?\d+), r (−?\d+) · (\d+) moves?/);
+  return m ? { pos: { q: num(m[1]), r: num(m[2]) }, moves: Number(m[3]) } : null;
+}
+
+async function hudBoxes() {
+  return ev(`[...document.querySelectorAll('button, #selection-readout, #player-status')].map(b => { const r = b.getBoundingClientRect(); return [r.left - 24, r.top - 24, r.right + 24, r.bottom + 24]; })`);
+}
+
 const initialCamera = (world, w, h) =>
   C.centerOnHex(C.createCamera({ zoom: C.initialZoom(w, h), bounds: C.gridWorldBounds(R) }), world.sanctuary);
 
-/** Tap centres and near-corners of sample hexes; each must select exactly that hex. */
+/**
+ * Tap centres and near-corners of sample hexes; each must pick exactly that
+ * hex (the readout names it). Hexes next to the player are skipped (a tap
+ * would step there). Tapping the player's own hex in between clears the
+ * route preview, so the next tap previews instead of travelling.
+ */
 async function verifyPicking(label, world, cam, w, h, isTouch) {
   const view = C.cameraToView(cam, w, h);
+  const { pos } = await playerState();
+  const me = hexToScreen(view, pos);
   const samples = [];
   for (const fx of [0.12, 0.3, 0.48, 0.66]) for (const fy of [0.25, 0.5, 0.72]) {
     const hh = screenToHex(view, w * fx, h * fy);
-    if (world.has(hh)) samples.push(hh);
+    if (world.has(hh) && hexDistance(hh, pos) > 1) samples.push(hh);
   }
   // Chrome's touch adjustment snaps taps near controls onto them: avoid.
-  const hud = await ev(`[...document.querySelectorAll('button, #selection-readout')].map(b => { const r = b.getBoundingClientRect(); return [r.left - 24, r.top - 24, r.right + 24, r.bottom + 24]; })`);
+  const hud = await hudBoxes();
   const nearHud = (p) => hud.some(([l, t, r, b]) => p.x >= l && p.x <= r && p.y >= t && p.y <= b) || p.x < 2 || p.y < 2 || p.x > w - 2 || p.y > h - 2;
   let ok = 0;
   let total = 0;
-  const terrains = new Set();
+  const kinds = new Set();
   for (const target of samples) {
     const c = hexToScreen(view, target);
     const pts = [c, ...hexCorners(c.x, c.y, view.size).filter((_, i) => i % 2).map((p) => ({ x: c.x + (p.x - c.x) * 0.8, y: c.y + (p.y - c.y) * 0.8 }))];
     for (const p of pts) {
       if (nearHud(p)) continue;
-      if ((await readout()) !== describeSelection(null)) {
-        await tap(c.x, c.y, isTouch);
-        if ((await readout()) !== describeSelection(null)) await tap(c.x, c.y, isTouch);
-      }
       await tap(p.x, p.y, isTouch);
       total++;
       const got = await readout();
-      const want = expectText(world, target);
-      if (got === want) { ok++; terrains.add(world.tileAt(target).terrain); } else fail(`${label}: ${hexKey(target)} -> "${got}" want "${want}"`);
-      await tap(p.x, p.y, isTouch); // deselect
+      const want = expectTap(world, pos, target);
+      if (got === want) { ok++; kinds.add(decideTap(world, { position: pos, preview: null, travelling: null, knows }, target).action.kind); } else fail(`${label}: ${hexKey(target)} -> "${got}" want "${want}"`);
+      await tap(me.x, me.y, isTouch); // tap yourself: clears the preview
     }
   }
-  console.log(`  ${label}: picking ${ok}/${total} (hex ${view.size.toFixed(1)}px; terrains: ${[...terrains].join(', ')})`);
+  const st = await playerState();
+  check(st.moves === 0 || hexEquals(st.pos, pos), `${label}: picking taps never moved the player`);
+  console.log(`  ${label}: picking ${ok}/${total} (hex ${view.size.toFixed(1)}px; outcomes: ${[...kinds].join(', ')})`);
+}
+
+/** Poll while the readout says "Travelling"; returns every distinct position seen. */
+async function watchTravel(start, timeoutMs = 20000) {
+  const seen = [start];
+  const end = Date.now() + timeoutMs;
+  for (;;) {
+    const r = await readout(); // read first: a step can land between the two reads
+    const st = await playerState();
+    if (!hexEquals(seen[seen.length - 1], st.pos)) seen.push(st.pos);
+    if (!r.startsWith('Travelling') || Date.now() > end) return { seen, readout: r, moves: st.moves };
+    await frame();
+  }
+}
+
+const samePath = (a, b) => a.length === b.length && a.every((h, i) => hexEquals(h, b[i]));
+const contiguous = (path) => path.every((h, i) => i === 0 || hexDistance(path[i - 1], h) === 1);
+
+/** Keys of every hex reachable on foot from `from`. */
+function reachableKeys(world, from) {
+  const seen = new Set([hexKey(from)]);
+  const queue = [from];
+  for (let i = 0; i < queue.length; i++) {
+    for (const n of hexNeighbors(queue[i])) {
+      const k = hexKey(n);
+      if (!seen.has(k) && world.isWalkable(n)) { seen.add(k); queue.push(n); }
+    }
+  }
+  return seen;
+}
+
+/** Tap-to-move flows: step, preview, travel, interrupt/resume, retarget, unreachable feedback. */
+async function verifyMovement(world, w, h, isTouch) {
+  await load(`${s.appUrl}?seed=everwake`);
+  let cam = initialCamera(world, w, h);
+  const tag = `${isTouch ? 'touch' : 'mouse'}-${w}x${h}`;
+  const hud = await hudBoxes();
+  const nearHud = (p) => hud.some(([l, t, r, b]) => p.x >= l && p.x <= r && p.y >= t && p.y <= b);
+  const view = () => C.cameraToView(cam, w, h);
+  const screenOf = (hh) => hexToScreen(view(), hh);
+  const inner = (hh, f = 0.25) => { const p = screenOf(hh); return p.x > w * f && p.x < w * (1 - f) && p.y > h * f && p.y < h * (1 - f) && !nearHud(p); };
+  const tapHex = async (hh) => { const p = screenOf(hh); await tap(p.x, p.y, isTouch); };
+  const recentre = async () => { await clickEl('#recenter'); cam = C.centerOnHex(cam, (await playerState()).pos); };
+  /** A deterministic reachable destination on screen, a few steps away. */
+  const pickTarget = (from, avoid = []) => {
+    for (const hh of hexesInRange(from, 8)) {
+      if (hexDistance(hh, from) < 3 || !inner(hh) || avoid.some((a) => hexDistance(a, hh) < 3)) continue;
+      const r = planRoute(world, from, hh, { knows });
+      if (r.status === 'ok' && r.path.length >= 4) return { hex: hh, ...r };
+    }
+    return null;
+  };
+
+  let st = await playerState();
+  check(st && hexEquals(st.pos, world.sanctuary) && st.moves === 0, `player starts on the sanctuary with 0 moves: ${await text('player-status')}`);
+  check((await readout()) === T.MOVE_HINT, 'movement hint shown');
+
+  // One-tap step to a neighbour, and back.
+  const nb = hexNeighbors(st.pos).find((n) => world.isWalkable(n) && inner(n, 0.1));
+  await tapHex(nb);
+  walked([nb]);
+  st = await playerState();
+  check(hexEquals(st.pos, nb) && st.moves === 1 && (await readout()) === T.describeStepped(labelOf(world, nb)), `adjacent tap steps one hex: "${await readout()}"`);
+  await tapHex(world.sanctuary);
+  walked([world.sanctuary]);
+  st = await playerState();
+  check(hexEquals(st.pos, world.sanctuary) && st.moves === 2, 'stepping back works');
+
+  // Preview then travel a route, one hex at a time.
+  let target = pickTarget(st.pos);
+  if (!target) { fail('no route target on screen'); return; }
+  await tapHex(target.hex);
+  check((await readout()) === T.describePreview(labelOf(world, target.hex), target.path.length, target.cost), `first tap previews: "${await readout()}"`);
+  check((await playerState()).moves === 2, 'preview costs no move');
+  await shot(`${tag}-route-preview`);
+  await tapHex(target.hex);
+  let run = await watchTravel(st.pos);
+  walked(target.path);
+  check(samePath(run.seen, [st.pos, ...target.path]), `travel walks the planned path hex by hex (${run.seen.length - 1} of ${target.path.length} positions observed)`);
+  check(contiguous(run.seen), 'every observed move is to a neighbour (no teleport)');
+  check(run.readout === T.describeArrived(labelOf(world, target.hex), target.path.length) && run.moves === 2 + target.path.length, `arrives: "${run.readout}", ${run.moves} moves`);
+
+  // Interrupt, confirm it stays stopped, then resume.
+  await recentre();
+  st = await playerState();
+  target = pickTarget(st.pos);
+  await tapHex(target.hex);
+  await tapHex(target.hex);
+  for (let i = 0; i < 100 && (await playerState()).moves < st.moves + 2; i++) await frame();
+  await tapHex(target.hex); // tapping the destination while travelling stops
+  const stopped = await playerState();
+  await s.wait(600);
+  const later = await playerState();
+  const stopText = await readout();
+  walked(target.path.slice(0, target.path.findIndex((hh) => hexEquals(hh, later.pos)) + 1));
+  check(stopText.startsWith('Stopped after') && hexEquals(stopped.pos, later.pos) && stopped.moves === later.moves && !hexEquals(later.pos, target.hex),
+    `tap stops travel and nothing moves while idle: "${stopText}"`);
+  await shot(`${tag}-stopped`);
+  await recentre();
+  await tapHex(target.hex); // the rest of the route is still previewed: one tap resumes
+  run = await watchTravel(later.pos);
+  walked(run.seen);
+  check(hexEquals(run.seen[run.seen.length - 1], target.hex) && contiguous(run.seen) && run.readout.startsWith('Arrived'), `resume reaches the destination: "${run.readout}"`);
+
+  // Retarget mid-route.
+  await recentre();
+  st = await playerState();
+  const a = pickTarget(st.pos);
+  const b = a && pickTarget(st.pos, [a.hex]);
+  if (!b) { fail('no second target for retargeting'); return; }
+  await tapHex(a.hex);
+  await tapHex(a.hex);
+  for (let i = 0; i < 100 && (await playerState()).moves < st.moves + 1; i++) await frame();
+  await tapHex(b.hex);
+  const mid = await playerState();
+  walked(a.path.slice(0, a.path.findIndex((hh) => hexEquals(hh, mid.pos)) + 1));
+  await s.wait(400);
+  check(hexEquals((await playerState()).pos, mid.pos), 'tapping another hex stops travel');
+  check((await readout()) === expectTap(world, mid.pos, b.hex), `and plans the new route: "${await readout()}"`);
+  await tapHex(b.hex);
+  run = await watchTravel(mid.pos);
+  walked(planRoute(world, mid.pos, b.hex, { knows }).path);
+  check(hexEquals(run.seen[run.seen.length - 1], b.hex) && contiguous(run.seen), `retargeted route reaches the new destination: "${run.readout}" seen ${run.seen.map(hexKey).join(' ')} want ${hexKey(b.hex)}`);
+
+  if (!isTouch) {
+    await recentre();
+    st = await playerState();
+    const t2 = pickTarget(st.pos);
+    await tapHex(t2.hex);
+    await tapHex(t2.hex);
+    const esc = async () => {
+      await s.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+      await s.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+      await frame();
+    };
+    await esc();
+    const e0 = await playerState();
+    walked(t2.path.slice(0, t2.path.findIndex((hh) => hexEquals(hh, e0.pos)) + 1));
+    await s.wait(400);
+    check((await readout()).startsWith('Stopped after') && (await playerState()).moves === e0.moves, 'Escape stops travel');
+    await esc();
+    check((await readout()) === T.MOVE_HINT, 'Escape again clears the route');
+  }
+
+  // Impassable and unreachable targets: clear feedback, no move. The
+  // everwake start has no cut-off land nearby, so island-133 (found by
+  // searching seeds) covers "unreachable": it has an islet ~7 hexes away.
+  const feedback = async (wld, kinds) => {
+    const reach = reachableKeys(wld, (await playerState()).pos);
+    const isKind = {
+      impassable: (hh) => !wld.isWalkable(hh),
+      unreachable: (hh) => wld.isWalkable(hh) && !reach.has(hexKey(hh)),
+    };
+    // Fog: only a mapped hex can be explained. Walk toward the nearest hex
+    // of the wanted kind (known to the check, not the player) until it is mapped.
+    const explore = async (what) => {
+      for (let leg = 0; leg < 8; leg++) {
+        st = await playerState();
+        const found = hexesInRange(st.pos, 40).filter((hh) => wld.has(hh) && knows(hh) && hexDistance(hh, st.pos) > 1 && isKind[what](hh));
+        if (found.length) return found.sort((x, y) => hexDistance(x, st.pos) - hexDistance(y, st.pos))[0];
+        const goal = hexesInRange(st.pos, 40).filter((hh) => wld.has(hh) && isKind[what](hh)).sort((x, y) => hexDistance(x, st.pos) - hexDistance(y, st.pos))[0];
+        if (!goal) return null;
+        await recentre();
+        const tappable = (hh) => { const p = screenOf(hh); return !nearHud(p) && p.x > 4 && p.y > 4 && p.x < w - 4 && p.y < h - 4; };
+        const step = mem.knownHexes().filter((hh) => reach.has(hexKey(hh)) && tappable(hh))
+          .sort((x, y) => hexDistance(x, goal) - hexDistance(y, goal))
+          .map((hh) => ({ hh, r: planRoute(wld, st.pos, hh, { knows }) }))
+          .find((x) => x.r.status === 'ok' && x.r.path.length >= 2);
+        if (!step) { fail(`exploring toward ${what}: no tappable mapped hex to walk to`); return null; }
+        await tapHex(step.hh);
+        await tapHex(step.hh);
+        const trip = await watchTravel(st.pos);
+        walked(step.r.path);
+        if (!hexEquals(trip.seen[trip.seen.length - 1], step.hh)) { fail(`exploring toward ${what}: stopped at ${hexKey(trip.seen[trip.seen.length - 1])}`); return null; }
+      }
+      return null;
+    };
+    for (const what of kinds) {
+      const hh = await explore(what);
+      await recentre();
+      let outs = 0;
+      for (let i = 0; i < 20 && !(await ev(`document.getElementById('zoom-out').disabled`)); i++) {
+        outs++;
+        await clickEl('#zoom-out');
+        cam = C.zoomAt(cam, 1 / 1.25, w / 2, h / 2, w, h);
+      }
+      st = await playerState();
+      if (!hh) { fail(`no mapped ${what} hex found by exploring`); continue; }
+      if (!inner(hh, 0.08)) {
+        // Near a HUD control: drag the map so the target sits mid-screen (a pan, never a tap).
+        const c = screenOf(hh);
+        const p0 = { x: w / 2, y: h * 0.4 };
+        const p1 = { x: p0.x + (w / 2 - c.x), y: p0.y + (h / 2 - c.y) };
+        const pm = { x: (p0.x + p1.x) / 2, y: (p0.y + p1.y) / 2 };
+        if (isTouch) { await touch('touchStart', [p0]); await touch('touchMove', [pm]); await touch('touchMove', [p1]); await touch('touchEnd', []); }
+        else { await mouse('mousePressed', p0.x, p0.y, { clickCount: 1 }); await mouse('mouseMoved', pm.x, pm.y, { buttons: 1 }); await mouse('mouseMoved', p1.x, p1.y, { buttons: 1 }); await mouse('mouseReleased', p1.x, p1.y, { clickCount: 1 }); }
+        await frame();
+        cam = C.panBy(cam, p1.x - p0.x, p1.y - p0.y);
+      }
+      await tapHex(hh);
+      const got = await readout();
+      check(got === expectTap(wld, st.pos, hh) && (await playerState()).moves === st.moves, `${what} target explained, no move: "${got}"`);
+      await shot(`${tag}-${what}`);
+      // Zoom back in so later exploring legs tap at a comfortable size.
+      for (let i = 0; i < outs; i++) {
+        await clickEl('#zoom-in');
+        cam = C.zoomAt(cam, 1.25, w / 2, h / 2, w, h);
+      }
+    }
+  };
+  await recentre();
+  await feedback(world, ['impassable']);
+  const isle = createWorld('island-133', R);
+  await load(`${s.appUrl}?seed=island-133`);
+  cam = initialCamera(isle, w, h);
+  await feedback(isle, ['unreachable']);
+}
+
+/** Mean colour `{ r, g, b, v }` (v = brightness) of a small box of world-canvas pixels around a CSS point. */
+async function sample(p) {
+  return ev(`(() => {
+    const c = document.getElementById('world-canvas');
+    const k = c.width / c.getBoundingClientRect().width;
+    // Read from a copy: repeated getImageData on the page's own context makes
+    // Chrome log a willReadFrequently warning, which the console check counts.
+    const copy = document.createElement('canvas');
+    copy.width = c.width; copy.height = c.height;
+    const cc = copy.getContext('2d', { willReadFrequently: true });
+    cc.drawImage(c, 0, 0);
+    const d = cc.getImageData(Math.round((${p.x} - 2) * k), Math.round((${p.y} - 2) * k), Math.max(1, Math.round(4 * k)), Math.max(1, Math.round(4 * k))).data;
+    const m = [0, 0, 0];
+    for (let i = 0; i < d.length; i += 4) { m[0] += d[i]; m[1] += d[i + 1]; m[2] += d[i + 2]; }
+    const n = d.length / 4;
+    return { r: m[0] / n, g: m[1] / n, b: m[2] / n, v: (m[0] + m[1] + m[2]) / n / 3 };
+  })()`);
+}
+const colourDistance = (a, b) => Math.hypot(a.r - b.r, a.g - b.g, a.b - b.b);
+
+/**
+ * Fog of war: only hexes within sight are mapped at start (boundary checked
+ * by tapping rings SIGHT_RADIUS and SIGHT_RADIUS + 1), a step reveals the
+ * next ring, terrain left behind stays mapped but drawn dim, and the Map
+ * dialog shows and picks explored hexes.
+ */
+async function verifyFog(world, w, h, isTouch) {
+  await load(`${s.appUrl}?seed=everwake`);
+  let cam = initialCamera(world, w, h);
+  const view = () => C.cameraToView(cam, w, h);
+  const hud = await hudBoxes();
+  const tappable = (hh) => { const p = hexToScreen(view(), hh); return p.x > 8 && p.y > 8 && p.x < w - 8 && p.y < h - 8 && !hud.some(([l, t, r, b]) => p.x >= l && p.x <= r && p.y >= t && p.y <= b); };
+  const start = world.sanctuary;
+  const me = hexToScreen(view(), start);
+  const ring = (d) => hexesInRange(start, d).filter((hh) => hexDistance(hh, start) === d && tappable(hh));
+
+  // Reveal boundary, read back through taps.
+  let edgeOk = 0; let beyondOk = 0;
+  const edge = ring(SIGHT_RADIUS).slice(0, 6);
+  const beyond = ring(SIGHT_RADIUS + 1).slice(0, 6);
+  for (const hh of edge) {
+    const p = hexToScreen(view(), hh);
+    await tap(p.x, p.y, isTouch);
+    const got = await readout();
+    if (!got.startsWith('Unexplored') && got === expectTap(world, start, hh)) edgeOk++; else fail(`edge ${hexKey(hh)}: "${got}"`);
+    await tap(me.x, me.y, isTouch);
+  }
+  for (const hh of beyond) {
+    const p = hexToScreen(view(), hh);
+    await tap(p.x, p.y, isTouch);
+    const got = await readout();
+    if (got === T.describeUnexplored(hh)) beyondOk++; else fail(`beyond ${hexKey(hh)}: "${got}"`);
+    await tap(me.x, me.y, isTouch);
+  }
+  check(edge.length > 0 && beyond.length > 0 && edgeOk === edge.length && beyondOk === beyond.length,
+    `start reveals radius ${SIGHT_RADIUS}: ring ${SIGHT_RADIUS} mapped (${edgeOk}/${edge.length}), ring ${SIGHT_RADIUS + 1} unexplored (${beyondOk}/${beyond.length})`);
+  check((await playerState()).moves === 0, 'boundary taps never moved the player');
+
+  // Step toward a hex just beyond sight: it is revealed. Step back: it is remembered (dim).
+  const dirs = hexNeighbors(start).filter((n) => world.isWalkable(n));
+  let probe = null; let nb = null;
+  for (const n of dirs) {
+    const far = { q: start.q + (n.q - start.q) * (SIGHT_RADIUS + 1), r: start.r + (n.r - start.r) * (SIGHT_RADIUS + 1) };
+    if (world.has(far) && tappable(far) && tappable(n)) { probe = far; nb = n; break; }
+  }
+  if (!probe) { fail('no probe hex for reveal-on-move'); return; }
+  const pp = hexToScreen(view(), probe);
+  // Deep fog (three rings past sight, beyond the cloud banks) is plain background.
+  const deep = { q: start.q + (probe.q - start.q) / (SIGHT_RADIUS + 1) * (SIGHT_RADIUS + 3), r: start.r + (probe.r - start.r) / (SIGHT_RADIUS + 1) * (SIGHT_RADIUS + 3) };
+  const deepP = hexToScreen(view(), deep);
+  const onCanvas = deepP.x > 4 && deepP.y > 4 && deepP.x < w - 4 && deepP.y < h - 4;
+  const cDeep = onCanvas ? await sample(deepP) : null;
+  const cUnknown = await sample(pp); // edge of the fog: under a cloud bank
+  await tap(hexToScreen(view(), nb).x, hexToScreen(view(), nb).y, isTouch);
+  walked([nb]);
+  const cVisible = await sample(pp);
+  await tap(pp.x, pp.y, isTouch);
+  check((await readout()) === expectTap(world, nb, probe) && !(await readout()).startsWith('Unexplored'), `a step reveals the next ring: "${await readout()}"`);
+  await tap(hexToScreen(view(), nb).x, hexToScreen(view(), nb).y, isTouch); // tap yourself: clear
+  await tap(me.x, me.y, isTouch); // step back to the sanctuary
+  walked([start]);
+  const cRemembered = await sample(pp);
+  await tap(pp.x, pp.y, isTouch);
+  const memText = await readout();
+  check(memText === expectTap(world, start, probe) && !memText.startsWith('Unexplored'), `out of sight but still mapped: "${memText}"`);
+  await tap(me.x, me.y, isTouch);
+  if (cDeep) check(cDeep.v < 40, `deep fog draws no terrain: brightness ${cDeep.v.toFixed(0)}`);
+  check(colourDistance(cUnknown, cVisible) > 8 && cRemembered.v < cVisible.v * 0.75,
+    `drawn fog edge → visible → remembered (dim): colour change ${colourDistance(cUnknown, cVisible).toFixed(0)}, brightness ${cUnknown.v.toFixed(0)} → ${cVisible.v.toFixed(0)} → ${cRemembered.v.toFixed(0)}`);
+  await shot(`fog-${w}x${h}`);
+
+  // Map dialog.
+  await clickEl('#map-button');
+  check(await ev(`document.getElementById('map-dialog').open`), 'Map opens the map dialog');
+  const wantSummary = `${T.describeExplored(mem.knownCount, mem.totalCount)} · you are at ${coordText(start)}`;
+  check((await text('map-summary')) === wantSummary, `map summary: "${await text('map-summary')}"`);
+  await frame();
+  await shot(`map-${w}x${h}`);
+  const box = await ev(`(() => { const r = document.getElementById('map-canvas').getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; })()`);
+  const mview = fitView(mem.knownHexes(), box.w, box.h, { maxSize: 16 }); // MAP_MAX_HEX in main.js
+  // An unmapped hex on the map does nothing.
+  const gap = hexesInRange(start, SIGHT_RADIUS + 6).find((hh) => world.has(hh) && !mem.isKnown(hh) && (() => { const c = hexToScreen(mview, hh); return c.x > 20 && c.y > 20 && c.x < box.w - 20 && c.y < box.h - 20; })());
+  if (gap) {
+    const c = hexToScreen(mview, gap);
+    await tap(box.x + c.x, box.y + c.y, isTouch);
+    check(await ev(`document.getElementById('map-dialog').open`), 'tapping an unmapped hex on the map does nothing');
+  }
+  // A mapped hex: the dialog closes and the view centres on it.
+  const pick = mem.knownHexes().filter((hh) => hexDistance(hh, start) === SIGHT_RADIUS)[0];
+  const pc = hexToScreen(mview, pick);
+  await tap(box.x + pc.x, box.y + pc.y, isTouch);
+  const pickedText = await readout();
+  check(!(await ev(`document.getElementById('map-dialog').open`)) && pickedText === describeSelection(pick, terrainOf(world, pick), world.sanctuary),
+    `tapping a mapped hex closes the map and looks there: "${pickedText}"`);
+  cam = C.centerOnHex(cam, pick);
+  await tap(w / 2, h / 2, isTouch);
+  check((await readout()) === expectTap(world, start, pick), 'the view is centred on the picked hex');
+  check((await playerState()).moves === 2, 'map use costs no moves');
 }
 
 async function perf(label, w, h, isTouch) {
@@ -101,7 +487,7 @@ async function perf(label, w, h, isTouch) {
 }
 
 try {
-  for (const cfg of VIEWPORTS) {
+  for (const cfg of VIEWPORTS.filter((v) => !process.env.VIEWPORT || v.name.includes(process.env.VIEWPORT))) {
     const { w, h, mobile } = cfg;
     console.log(`\n== ${cfg.name}`);
     await s.setViewport(cfg);
@@ -111,8 +497,8 @@ try {
     let cam = initialCamera(world, w, h);
 
     check((await text('seed-text')) === 'everwake', 'seed button shows the seed from the URL');
-    const layout = await ev(`(() => { const r = (q) => document.querySelector(q).getBoundingClientRect(); const t = r('.hud-title'), sb = r('#seed-button'), c = r('#coords-toggle'); return { overlap: t.right > sb.left, right: c.right, sw: document.scrollingElement.scrollWidth }; })()`);
-    check(!layout.overlap && layout.right <= w && layout.sw <= w, `top bar fits ${JSON.stringify(layout)}`);
+    const layout = await ev(`(() => { const r = (q) => document.querySelector(q).getBoundingClientRect(); const t = r('.hud-title'), sb = r('#seed-button'), c = r('#coords-toggle'), m = r('#map-button'), st = r('#player-status'); return { overlap: t.right > sb.left, right: c.right, mapBottom: m.bottom, statusClear: m.top > st.bottom || m.left > st.right, sw: document.scrollingElement.scrollWidth }; })()`);
+    check(!layout.overlap && layout.right <= w && layout.sw <= w && layout.mapBottom <= h && layout.statusClear, `top bar and view controls fit ${JSON.stringify(layout)}`);
 
     await tap(w / 2, h / 2, mobile);
     check((await readout()).startsWith('Sanctuary (grassland)'), `opens centred on the sanctuary: "${await readout()}"`);
@@ -133,6 +519,12 @@ try {
     await shot(`${cfg.name}-min`);
     await verifyPicking('min zoom', world, cam, w, h, mobile);
     await perf('min zoom (drag)', w, h, mobile);
+
+    console.log('  -- fog of war');
+    await verifyFog(world, w, h, mobile);
+
+    console.log('  -- movement');
+    await verifyMovement(world, w, h, mobile);
 
     // Dialog and seed flows on one desktop and one phone viewport.
     if (cfg.name.startsWith('desktop-1280') || cfg.name.startsWith('phone-390')) {
@@ -172,8 +564,10 @@ try {
       check((await text('seed-text')) === 'mossy fen 12' && !(await dialogOpen()), 'Enter creates the world; seed normalised');
       check(new URLSearchParams(search).get('seed') === 'mossy fen 12', `URL keeps the seed: ${search}`);
       world = createWorld('mossy fen 12', R);
+      resetMemory(world);
       cam = C.centerOnHex(cam, world.sanctuary);
-      check((await readout()) === describeSelection(null), 'selection cleared on new world');
+      check((await readout()) === T.MOVE_HINT, 'selection cleared on new world');
+      check((await text('player-status')) === T.describePlayer({ position: world.sanctuary, moves: 0 }), 'player reset to the new sanctuary');
       await tap(w / 2, h / 2, mobile);
       check((await readout()).startsWith('Sanctuary'), 'new world centred on its sanctuary');
       await tap(w / 2, h / 2, mobile);
@@ -184,13 +578,12 @@ try {
       check((await text('seed-text')) === 'mossy fen 12', 'reload keeps the seed');
 
       const p0 = { x: w / 2, y: h / 2 };
-      const p1 = { x: p0.x + 150, y: p0.y + 90 };
+      const p1 = { x: p0.x + (mobile ? 150 : 260), y: p0.y + (mobile ? 90 : 160) };
       if (mobile) { await touch('touchStart', [p0]); await touch('touchMove', [{ x: p0.x + 60, y: p0.y + 40 }]); await touch('touchMove', [p1]); await touch('touchEnd', []); }
       else { await mouse('mousePressed', p0.x, p0.y, { clickCount: 1 }); await mouse('mouseMoved', p1.x, p1.y, { buttons: 1 }); await mouse('mouseReleased', p1.x, p1.y, { clickCount: 1 }); }
       await frame();
       await tap(w / 2, h / 2, mobile);
-      check(!(await readout()).startsWith('Sanctuary'), 'drag moved the view off the sanctuary');
-      await tap(w / 2, h / 2, mobile);
+      check(!(await readout()).startsWith('Sanctuary') && hexEquals((await playerState()).pos, world.sanctuary), 'drag moved the view off the sanctuary (player did not move)');
       await clickEl('#recenter');
       await tap(w / 2, h / 2, mobile);
       check((await readout()).startsWith('Sanctuary'), 'Centre returns to the sanctuary');

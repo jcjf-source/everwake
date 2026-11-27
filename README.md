@@ -2,7 +2,7 @@
 
 A turn-based, hex-grid exploration roguelite for the browser. You set out from a sanctuary into a persistent, seeded world, map it, take risks, and return (or die) wiser.
 
-**Status:** early prototype. The current build generates a seeded terrain map (water, rivers, forests, hills, mountains, and more) with a sanctuary near the centre. Pan by dragging and zoom with the mouse wheel, pinch, or the + / − buttons. Tap a hex to see its terrain, move cost and distance from the sanctuary. The **Seed** button shows the world seed and creates a new world from a typed or random seed. The seed is kept in the URL (`?seed=…`), so reloading or sharing the link reopens the same world. There is no gameplay yet. See [docs/ROADMAP.md](docs/ROADMAP.md) for progress.
+**Status:** early prototype. The current build generates a seeded terrain map (water, rivers, forests, hills, mountains, and more) with a sanctuary near the centre. Pan by dragging and zoom with the mouse wheel, pinch, or the + / − buttons. You start at the sanctuary. Tap a neighbouring hex to step onto it; tap a farther hex to preview a route (the readout gives its length and terrain cost), then tap it again to travel there one hex at a time. Tap during travel to stop (tap the destination again to resume), or tap another hex to retarget; **Escape** also stops or clears a route. Impassable and cut-off hexes are explained instead. The centre button recentres on you. The **Seed** button shows the world seed and creates a new world from a typed or random seed. The seed is kept in the URL (`?seed=…`), so reloading or sharing the link reopens the same world. Turns, fog of war and everything else are still to come. See [docs/ROADMAP.md](docs/ROADMAP.md) for progress.
 
 ## Tech
 
@@ -46,7 +46,7 @@ node tools/browser/check-world.mjs shots
 npm run perf                 # frame times while dragging; add -- --profile for hot functions
 ```
 
-Each script starts its own dev server (port 8137) and a throwaway headless Chrome, then closes only those.
+Set `VIEWPORT=phone-390` (any viewport-name fragment) to run the check on one viewport. Each script starts its own dev server (port 8137) and a throwaway headless Chrome, then closes only those.
 
 ## Deploy to GitHub Pages
 
@@ -68,10 +68,12 @@ favicon.svg
 css/main.css          Layout, palette, and responsive styles
 src/main.js           Bootstrap: installs error reporting, then loads modules
 src/core/             Core services (error panel, seeded PRNG, cosmetic hashes)
+src/entities/         Player state
+src/systems/          Movement rules and stepwise travel
 src/data/             Terrain definitions (gameplay properties)
-src/world/            Hex geometry, seeds, noise, terrain generation, world + sanctuary
-src/render/           Canvas sizing, camera, view transform, terrain drawing
-src/ui/               Pointer input, HUD (readout, zoom, Coords), seed dialog
+src/world/            Hex geometry, A* pathfinding, seeds, noise, terrain generation, world + sanctuary, fog of war / map memory
+src/render/           Canvas sizing, camera, view transform, terrain, player and route drawing
+src/ui/               Pointer input, tap intent, HUD (readout, status, zoom, Coords), seed dialog, Map dialog
 tests/                Unit tests (node --test)
 tools/serve.mjs       Zero-dependency local dev server
 tools/browser/        Headless-Chrome checks and frame-time benchmark (CDP)

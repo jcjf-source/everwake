@@ -28,14 +28,23 @@
     <nav class="hud-zoom" aria-label="View controls">
       <button type="button" id="zoom-in" class="hud-button hud-button--icon" aria-label="Zoom in" title="Zoom in">+</button>
       <button type="button" id="zoom-out" class="hud-button hud-button--icon" aria-label="Zoom out" title="Zoom out">&minus;</button>
-      <button type="button" id="recenter" class="hud-button hud-button--icon" aria-label="Centre view" title="Centre the view">
+      <button type="button" id="recenter" class="hud-button hud-button--icon" aria-label="Centre on you" title="Centre the view on you">
         <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false">
           <circle cx="12" cy="12" r="6.5" fill="none" stroke="currentColor" stroke-width="1.6"/>
           <circle cx="12" cy="12" r="1.8" fill="currentColor"/>
           <path d="M12 2.5v4M12 17.5v4M2.5 12h4M17.5 12h4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
         </svg>
       </button>
+      <button type="button" id="map-button" class="hud-button hud-button--icon" aria-haspopup="dialog"
+              aria-label="Map" title="Map: explored areas and where you are">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false">
+          <path d="M3.5 6.2 9 4l6 2.2 5.5-2.2v13.8L15 20l-6-2.2-5.5 2.2Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+          <path d="M9 4v13.8M15 6.2V20" stroke="currentColor" stroke-width="1.6"/>
+        </svg>
+      </button>
     </nav>
+
+    <p id="player-status" class="hud-status"></p>
 
     <p id="selection-readout" class="hud-readout" aria-live="polite"></p>
 
@@ -59,6 +68,24 @@
       <div class="world-dialog__actions">
         <button type="button" id="seed-cancel" class="hud-button">Cancel</button>
         <button type="submit" id="seed-create" class="hud-button hud-button--primary">Replace world</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="map-dialog" class="world-dialog map-dialog" aria-labelledby="map-dialog-title">
+    <form class="world-dialog__form" method="dialog">
+      <h2 id="map-dialog-title">Map</h2>
+      <p id="map-summary" class="world-dialog__current"></p>
+      <canvas id="map-canvas" class="map-dialog__canvas"
+              aria-label="Map of explored hexes. Tap a mapped hex to look at it."></canvas>
+      <ul class="map-dialog__legend">
+        <li><span class="map-key map-key--visible"></span>In sight</li>
+        <li><span class="map-key map-key--remembered"></span>Remembered</li>
+        <li><span class="map-key map-key--you"></span>You</li>
+      </ul>
+      <p class="world-dialog__note">Tap a mapped hex to look at it.</p>
+      <div class="world-dialog__actions">
+        <button type="submit" id="map-close" class="hud-button">Close</button>
       </div>
     </form>
   </dialog>

@@ -1,11 +1,14 @@
 /**
- * HTML overlay: selected-hex readout (terrain, cost, distance to the
- * sanctuary), coordinate debug toggle, and
- * zoom / recentre buttons (an alternative to wheel and pinch).
+ * HTML overlay: the feedback readout and player status line, the
+ * coordinate debug toggle, and zoom / recentre buttons (an alternative to
+ * wheel and pinch). Recentre centres on the player.
  */
 import { hexDistance } from '../world/hex.js';
 
 const fmt = (n) => (n < 0 ? `−${-n}` : String(n)); // proper minus sign
+
+/** "q 3, r −2" */
+export const coordText = (h) => `q ${fmt(h.q)}, r ${fmt(h.r)}`;
 
 /**
  * Text for the selection readout. Pure; unit tested.
@@ -15,7 +18,7 @@ const fmt = (n) => (n < 0 ? `−${-n}` : String(n)); // proper minus sign
  */
 export function describeSelection(selected, terrain = null, sanctuary = null) {
   if (!selected) return 'Click or tap a hex to inspect it.';
-  const parts = [terrain ? terrain.name : 'Hex', `q ${fmt(selected.q)}, r ${fmt(selected.r)}`];
+  const parts = [terrain ? terrain.name : 'Hex', coordText(selected)];
   if (sanctuary && hexDistance(selected, sanctuary) === 0) {
     parts[0] = `Sanctuary (${terrain ? terrain.name.toLowerCase() : 'hex'})`;
     parts.push('safe start');
@@ -31,7 +34,7 @@ export function describeSelection(selected, terrain = null, sanctuary = null) {
 
 /**
  * @param {{
- *   readout: HTMLElement, coordsToggle: HTMLButtonElement,
+ *   readout: HTMLElement, status: HTMLElement, coordsToggle: HTMLButtonElement,
  *   zoomIn: HTMLButtonElement, zoomOut: HTMLButtonElement, recenter: HTMLButtonElement,
  * }} el
  * @param {{
@@ -51,9 +54,13 @@ export function createHud(el, handlers) {
   el.recenter.addEventListener('click', () => handlers.onRecenter());
 
   return {
-    showSelection(selected, terrain, sanctuary) {
-      el.readout.textContent = describeSelection(selected, terrain, sanctuary);
-      el.recenter.title = selected ? 'Centre the view on the selected hex' : 'Centre the view on the sanctuary';
+    /** Main feedback line (selection, route, travel progress). */
+    showReadout(text) {
+      el.readout.textContent = text;
+    },
+    /** Player position and move counter. */
+    showStatus(text) {
+      el.status.textContent = text;
     },
     /** Disable zoom buttons at the zoom limits so they never do nothing silently. */
     showZoom(cam) {

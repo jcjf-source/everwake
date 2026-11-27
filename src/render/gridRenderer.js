@@ -1,16 +1,29 @@
 /**
- * Draws the terrain map and the selection/hover/debug overlays.
+ * Draws the terrain map under fog of war, the player and route overlays,
+ * and the selection/hover/debug overlays.
  * Reads state only; never changes it.
+ *
+ * Fog (when `frame.fog` is given): unknown hexes are not drawn at all (the
+ * dark background shows through, so hidden terrain cannot be inferred),
+ * remembered hexes are drawn under a dim veil, and visible hexes in full.
+ * Soft cloud banks (fogArt.js) blur the boundary between known and unknown.
+ * Landmarks such as the sanctuary are drawn only once their hex is known.
  *
  * Only the cells passed in `frame.cells` (the visible subset) are drawn.
  * Terrain fills are batched into one path per palette colour, and details
  * into one path per mark type, so a frame costs a fixed number of fill calls
  * regardless of how many hexes are on screen.
  */
-import { hexCorners, hexEquals, hexNeighbors } from '../world/hex.js';
+import { hexCorners, hexEquals } from '../world/hex.js';
 import { hexToScreen } from './gridView.js';
 import { TERRAIN_PALETTE, tilePaletteIndex } from './terrainStyle.js';
 import { drawTerrainDetails, drawSanctuary } from './terrainArt.js';
+import { drawStepRim, drawRoute, drawNoWayMarker, drawPlayer } from './entityArt.js';
+import { FOG, canSee } from '../world/mapMemory.js';
+import { drawFogEdge } from './fogArt.js';
+
+/** Veil over remembered (seen before, not in sight) hexes. */
+export const REMEMBERED_VEIL = 'rgba(14,20,22,0.58)';
 
 /** Minimum on-screen hex size at which coordinate labels are legible. */
 export const MIN_LABEL_SIZE = 15;
@@ -58,10 +71,15 @@ function traceHex(ctx, cx, cy, size) {
  *   tileAt: (h: {q:number,r:number}) => import('../world/worldGen.js').Tile,
  *   sanctuary: {q:number,r:number} | null,
  *   ui: { hovered: {q:number,r:number}|null, selected: {q:number,r:number}|null, showCoords: boolean },
- * }} frame
+ *   player?: {q:number,r:number} | null,
+ *   stepRim?: Array<{q:number,r:number}>,
+ *   route?: { path: Array<{q:number,r:number}>, mode: 'preview' | 'travel' } | null,
+ *   noWay?: {q:number,r:number} | null,
+ *   fog?: { stateAt: (h: {q:number,r:number}) => number, isKnown: Function, isVisible: Function } | null,
+ * }} frame `fog` omitted: everything is drawn as visible.
  */
 export function drawGrid(ctx, frame) {
-  const { width, height, view, cells, has, tileAt, sanctuary, ui } = frame;
+  const { width, height, view, cells, tileAt, sanctuary, ui } = frame;
   const { size } = view;
 
   // Background: dark slate with a soft glow at the viewport centre.
@@ -76,7 +94,9 @@ export function drawGrid(ctx, frame) {
   const cellSize = size - inset;
   const off = cornerOffsets(cellSize);
   const outline = size >= 10; // at tiny sizes an outline is just noise
-  const tiles = cells.map(tileAt);
+  const fog = frame.fog ?? null;
+  const known = fog ? cells.filter((h) => fog.stateAt(h) !== FOG.UNKNOWN) : cells;
+  const tiles = known.map(tileAt);
   const buckets = TERRAIN_PALETTE.map(() => []);
   for (const t of tiles) buckets[tilePaletteIndex(t)].push(t);
   ctx.lineWidth = 1;
@@ -95,20 +115,28 @@ export function drawGrid(ctx, frame) {
 
   drawTerrainDetails(ctx, view, tiles);
 
-  if (sanctuary && isOnScreen(view, sanctuary, width, height)) drawSanctuary(ctx, view, sanctuary);
+  const showSanctuary = sanctuary && (!fog || canSee(fog, { at: sanctuary, kind: 'landmark' }));
+  if (showSanctuary && isOnScreen(view, sanctuary, width, height)) drawSanctuary(ctx, view, sanctuary);
 
-  // Neighbours of the selected hex: faint gold rim.
-  if (ui.selected) {
+  // Remembered terrain: one batched veil over every remembered hex.
+  if (fog) {
     ctx.beginPath();
-    for (const n of hexNeighbors(ui.selected)) {
-      if (!has(n)) continue;
-      const c = hexToScreen(view, n);
-      addHexPath(ctx, c.x, c.y, size - inset * 2.5);
+    let any = false;
+    for (const h of known) {
+      if (fog.stateAt(h) !== FOG.REMEMBERED) continue;
+      const c = hexToScreen(view, h);
+      addHexPathFast(ctx, c.x, c.y, off, false);
+      any = true;
     }
-    ctx.lineWidth = Math.max(1, size * 0.05);
-    ctx.strokeStyle = 'rgba(194,163,90,0.35)';
-    ctx.stroke();
+    if (any) {
+      ctx.fillStyle = REMEMBERED_VEIL;
+      ctx.fill();
+    }
+    drawFogEdge(ctx, view, cells, fog.stateAt);
   }
+
+  // Hexes the player can step to with one tap.
+  if (frame.stepRim) drawStepRim(ctx, view, frame.stepRim);
 
   // Hover.
   if (ui.hovered && !(ui.selected && hexEquals(ui.hovered, ui.selected))) {
@@ -131,6 +159,11 @@ export function drawGrid(ctx, frame) {
     ctx.strokeStyle = 'rgba(214,183,110,0.95)';
     ctx.stroke();
   }
+
+  // Route preview or the route being travelled, then a "no way" marker.
+  if (frame.route && frame.player) drawRoute(ctx, view, frame.player, frame.route.path, frame.route.mode);
+  if (frame.noWay) drawNoWayMarker(ctx, view, frame.noWay);
+  if (frame.player && isOnScreen(view, frame.player, width, height)) drawPlayer(ctx, view, frame.player);
 
   // Coordinate debug labels (only when hexes are big enough to read).
   if (ui.showCoords && size >= MIN_LABEL_SIZE) {

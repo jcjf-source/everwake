@@ -144,6 +144,24 @@ html, body {
   pointer-events: none;
 }
 
+/* Player status (position and move count): under the title, top left. */
+.hud-status {
+  position: absolute;
+  top: calc(max(0.6rem, env(safe-area-inset-top)) + 52px);
+  left: max(1rem, env(safe-area-inset-left));
+  max-width: calc(100vw - 6rem);
+  margin: 0;
+  padding: 0.3rem 0.6rem;
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+  color: var(--fog);
+  background: rgba(15, 22, 20, 0.6);
+  border: 1px solid rgba(154, 167, 160, 0.2);
+  border-radius: 4px;
+  pointer-events: none;
+}
+.hud-status:empty { display: none; }
+
 .noscript {
   position: absolute;
   bottom: 2rem;
@@ -286,3 +304,46 @@ html, body {
 .world-dialog__error { min-height: 1.2em; margin: 0.35rem 0 0; font-size: 0.8rem; color: #f0b9a8; }
 .world-dialog__note { margin: 0.3rem 0 1rem; font-size: 0.8rem; color: var(--fog); }
 .world-dialog__actions { display: flex; justify-content: flex-end; gap: 0.5rem; flex-wrap: wrap; }
+
+/* Map dialog (Task 05): overview of explored hexes. */
+.map-dialog { width: min(calc(100vw - 2rem), 36rem); }
+.map-dialog__canvas {
+  display: block;
+  width: 100%;
+  height: min(60vh, 26rem);
+  height: min(60dvh, 26rem);
+  border: 1px solid rgba(154, 167, 160, 0.25);
+  border-radius: 4px;
+  background: var(--ink);
+  touch-action: none;
+  cursor: pointer;
+}
+.map-dialog__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1rem;
+  margin: 0.6rem 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.8rem;
+  color: var(--fog);
+}
+.map-dialog__legend li { display: inline-flex; align-items: center; gap: 0.4em; }
+.map-key {
+  display: inline-block;
+  width: 0.9em;
+  height: 0.9em;
+  border-radius: 2px;
+  border: 1px solid rgba(154, 167, 160, 0.4);
+}
+.map-key--visible { background: rgb(84, 100, 70); }
+.map-key--remembered { background: rgb(42, 52, 44); }
+.map-key--you { background: rgb(236, 230, 212); border-radius: 50%; border-color: rgb(22, 30, 27); }
+/* Short landscape phones: keep the whole map dialog on screen without scrolling. */
+@media (max-height: 500px) {
+  .map-dialog .world-dialog__form { padding: 0.6rem 0.9rem 0.7rem; }
+  .map-dialog h2 { display: none; }
+  .map-dialog__canvas { height: calc(100dvh - 11.5rem); }
+  .map-dialog .world-dialog__note { display: none; }
+  .map-dialog__legend { margin-top: 0.4rem; }
+}
