@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#1b2420">
+  <meta name="description" content="Everwake — a turn-based hex exploration roguelite (early prototype).">
+  <title>Everwake</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="css/main.css">
+</head>
+<body>
+  <main id="app" class="app">
+    <canvas id="world-canvas" class="world-canvas" aria-hidden="true"></canvas>
+
+    <header class="hud-top">
+      <h1 class="hud-title">Everwake</h1>
+      <div class="hud-actions">
+        <button type="button" id="seed-button" class="hud-button hud-button--seed"
+                aria-haspopup="dialog" title="World seed: view or create a new world">
+          <span class="hud-button__label">Seed</span> <span id="seed-text" class="hud-button__value"></span>
+        </button>
+        <button type="button" id="coords-toggle" class="hud-button" aria-pressed="false"
+                title="Show axial (q, r) coordinates on each hex">Coords</button>
+      </div>
+    </header>
+
+    <nav class="hud-zoom" aria-label="View controls">
+      <button type="button" id="zoom-in" class="hud-button hud-button--icon" aria-label="Zoom in" title="Zoom in">+</button>
+      <button type="button" id="zoom-out" class="hud-button hud-button--icon" aria-label="Zoom out" title="Zoom out">&minus;</button>
+      <button type="button" id="recenter" class="hud-button hud-button--icon" aria-label="Centre view" title="Centre the view">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false">
+          <circle cx="12" cy="12" r="6.5" fill="none" stroke="currentColor" stroke-width="1.6"/>
+          <circle cx="12" cy="12" r="1.8" fill="currentColor"/>
+          <path d="M12 2.5v4M12 17.5v4M2.5 12h4M17.5 12h4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+        </svg>
+      </button>
+    </nav>
+
+    <p id="selection-readout" class="hud-readout" aria-live="polite"></p>
+
+    <noscript>
+      <p class="noscript">Everwake needs JavaScript enabled to run.</p>
+    </noscript>
+  </main>
+
+  <dialog id="world-dialog" class="world-dialog" aria-labelledby="world-dialog-title">
+    <form id="world-form" class="world-dialog__form" method="dialog" novalidate>
+      <h2 id="world-dialog-title">World seed</h2>
+      <p class="world-dialog__current">Current world: <strong id="world-current-seed"></strong></p>
+      <label for="seed-input" class="world-dialog__label">Seed for a new world</label>
+      <div class="world-dialog__row">
+        <input id="seed-input" name="seed" type="text" autocomplete="off" autocapitalize="off"
+               spellcheck="false" maxlength="32" aria-describedby="seed-error seed-note">
+        <button type="button" id="seed-random" class="hud-button">Random</button>
+      </div>
+      <p id="seed-error" class="world-dialog__error" aria-live="polite"></p>
+      <p id="seed-note" class="world-dialog__note">The same seed always creates the same map. Creating a world replaces the current map.</p>
+      <div class="world-dialog__actions">
+        <button type="button" id="seed-cancel" class="hud-button">Cancel</button>
+        <button type="submit" id="seed-create" class="hud-button hud-button--primary">Replace world</button>
+      </div>
+    </form>
+  </dialog>
+
+  <section id="error-panel" class="error-panel" role="alert" aria-live="assertive" hidden>
+    <div class="error-panel__header">
+      <h2>Something went wrong</h2>
+      <button type="button" id="error-dismiss" class="error-panel__dismiss">Dismiss</button>
+    </div>
+    <p class="error-panel__hint">Details are also logged to the browser console.</p>
+    <ol id="error-list" class="error-panel__list"></ol>
+  </section>
+
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>

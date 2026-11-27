@@ -1,0 +1,7 @@
+node_modules/
+# Screenshots from tools/browser/check-world.mjs
+shots/
+# Local Claude Code settings
+.claude/settings.local.json
+.DS_Store
+Thumbs.db

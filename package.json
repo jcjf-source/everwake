@@ -1,0 +1,16 @@
+{
+  "name": "everwake",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Everwake: a turn-based hex exploration roguelite for the browser.",
+  "type": "module",
+  "scripts": {
+    "start": "node tools/serve.mjs",
+    "test": "node --test",
+    "check:browser": "node tools/browser/check-world.mjs",
+    "perf": "node tools/browser/perf.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

@@ -1,0 +1,288 @@
+/* Everwake — base styles. Palette: moss, slate, earth, desaturated blue, parchment, muted gold. */
+:root {
+  --ink: #0f1614;
+  --slate: #1b2420;
+  --moss: #3f5243;
+  --fog: #9aa7a0;
+  --parchment: #e4dcc6;
+  --gold: #c2a35a;
+  --danger-bg: #2a1614;
+  --danger-edge: #8a4a3c;
+  --font-display: "Cormorant Garamond", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+  --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--ink);
+  color: var(--parchment);
+  font-family: var(--font-ui);
+  -webkit-text-size-adjust: 100%;
+}
+
+.app {
+  position: fixed;
+  inset: 0;
+  /* Dynamic viewport units avoid mobile browser chrome clipping where supported. */
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+  touch-action: none;           /* play area: no accidental page scroll/zoom */
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.world-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* HUD overlays. The containers ignore pointer events so taps reach the
+   canvas; only the controls themselves are interactive. */
+.hud-top {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: max(0.6rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right))
+           0.6rem max(1rem, env(safe-area-inset-left));
+  pointer-events: none;
+}
+
+.hud-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: clamp(1.1rem, 4vw, 1.5rem);
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--parchment);
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.7);
+}
+
+.hud-button {
+  pointer-events: auto;
+  min-height: 44px;              /* touch target */
+  padding: 0 1rem;
+  font: inherit;
+  font-size: 0.85rem;
+  letter-spacing: 0.04em;
+  color: var(--fog);
+  background: rgba(15, 22, 20, 0.75);
+  border: 1px solid rgba(154, 167, 160, 0.35);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.hud-button:hover { color: var(--parchment); border-color: rgba(228, 220, 198, 0.5); }
+.hud-button:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+.hud-button[aria-pressed="true"] {
+  color: var(--ink);
+  background: var(--gold);
+  border-color: var(--gold);
+}
+
+.hud-button { -webkit-tap-highlight-color: transparent; }
+.hud-button:active:not(:disabled) { background: rgba(194, 163, 90, 0.25); }
+
+.hud-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+  color: var(--fog);
+  border-color: rgba(154, 167, 160, 0.35);
+}
+
+/* Zoom / recentre stack: right edge, vertically centred, clear of the top
+   bar and bottom readout at every viewport size. */
+.hud-zoom {
+  position: absolute;
+  right: max(0.75rem, env(safe-area-inset-right));
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  pointer-events: none;
+}
+.hud-button--icon {
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  font-size: 1.4rem;
+  line-height: 1;
+}
+
+.world-canvas { cursor: grab; }
+
+.hud-readout {
+  position: absolute;
+  left: 50%;
+  bottom: max(0.8rem, env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: calc(100vw - 2rem);
+  margin: 0;
+  padding: 0.5rem 0.9rem;
+  font-size: 0.85rem;
+  text-align: center;
+  color: var(--parchment);
+  background: rgba(15, 22, 20, 0.75);
+  border: 1px solid rgba(154, 167, 160, 0.25);
+  border-radius: 4px;
+  pointer-events: none;
+}
+
+.noscript {
+  position: absolute;
+  bottom: 2rem;
+  width: 100%;
+  text-align: center;
+}
+
+/* Error panel: always visible above everything when populated. */
+.error-panel {
+  position: fixed;
+  left: 50%;
+  bottom: max(1rem, env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  width: min(calc(100vw - 2rem), 40rem);
+  max-height: 50vh;
+  overflow: auto;
+  padding: 0.9rem 1rem;
+  background: var(--danger-bg);
+  border: 1px solid var(--danger-edge);
+  border-radius: 6px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.6);
+  z-index: 1000;
+  font-size: 0.9rem;
+  user-select: text;
+  -webkit-user-select: text;
+  touch-action: auto;
+}
+.error-panel[hidden] { display: none; }
+
+.error-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.error-panel h2 { margin: 0; font-size: 1rem; color: #f0b9a8; }
+
+.error-panel__dismiss {
+  min-height: 44px;              /* touch target */
+  min-width: 44px;
+  padding: 0 1rem;
+  font: inherit;
+  color: var(--parchment);
+  background: transparent;
+  border: 1px solid var(--danger-edge);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.error-panel__dismiss:hover,
+.error-panel__dismiss:focus-visible { background: rgba(138, 74, 60, 0.35); outline: none; }
+
+.error-panel__hint { margin: 0.4rem 0 0.6rem; color: var(--fog); font-size: 0.8rem; }
+
+.error-panel__list { margin: 0; padding-left: 1.2rem; }
+.error-panel__list li { margin-bottom: 0.6rem; word-break: break-word; }
+.error-panel__list pre {
+  margin: 0.3rem 0 0;
+  white-space: pre-wrap;
+  font-size: 0.75rem;
+  color: var(--fog);
+}
+
+/* Top-bar action group: seed + coordinates. */
+.hud-actions {
+  display: flex;
+  gap: 0.5rem;
+  min-width: 0;
+  pointer-events: none;
+}
+.hud-button--seed {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+  min-width: 0;
+  max-width: min(16rem, 46vw);
+}
+.hud-button__label {
+  flex: none;
+  font-size: 0.7rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--gold);
+}
+.hud-button__value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--parchment);
+}
+.hud-button--primary {
+  color: var(--ink);
+  background: var(--gold);
+  border-color: var(--gold);
+}
+.hud-button--primary:hover { color: var(--ink); background: #d2b46a; border-color: #d2b46a; }
+
+/* World seed dialog. */
+.world-dialog {
+  width: min(calc(100vw - 2rem), 26rem);
+  max-height: calc(100dvh - 2rem);
+  margin: auto;
+  padding: 0;
+  color: var(--parchment);
+  background: var(--slate);
+  border: 1px solid rgba(154, 167, 160, 0.35);
+  border-radius: 6px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
+  touch-action: auto;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.world-dialog::backdrop { background: rgba(6, 10, 9, 0.6); }
+.world-dialog__form { padding: 1rem 1.1rem 1.1rem; }
+.world-dialog h2 {
+  margin: 0 0 0.5rem;
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 1.3rem;
+  letter-spacing: 0.08em;
+}
+.world-dialog__current { margin: 0 0 0.9rem; font-size: 0.85rem; color: var(--fog); overflow-wrap: anywhere; }
+.world-dialog__current strong { color: var(--parchment); font-weight: 600; }
+.world-dialog__label { display: block; margin-bottom: 0.35rem; font-size: 0.8rem; color: var(--fog); }
+.world-dialog__row { display: flex; gap: 0.5rem; }
+.world-dialog__row input {
+  flex: 1;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 0.7rem;
+  font: inherit;
+  font-size: 1rem;                /* >= 16px avoids iOS focus zoom */
+  color: var(--parchment);
+  background: var(--ink);
+  border: 1px solid rgba(154, 167, 160, 0.45);
+  border-radius: 4px;
+}
+.world-dialog__row input:focus-visible { outline: 2px solid var(--gold); outline-offset: 1px; }
+.world-dialog__row input[aria-invalid="true"] { border-color: var(--danger-edge); }
+.world-dialog__error { min-height: 1.2em; margin: 0.35rem 0 0; font-size: 0.8rem; color: #f0b9a8; }
+.world-dialog__note { margin: 0.3rem 0 1rem; font-size: 0.8rem; color: var(--fog); }
+.world-dialog__actions { display: flex; justify-content: flex-end; gap: 0.5rem; flex-wrap: wrap; }
