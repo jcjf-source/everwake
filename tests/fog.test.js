@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { hex, hexDistance, hexKey, hexCorners, hexesInRange } from '../src/world/hex.js';
 import { createMapMemory, restoreMapMemory, canSee, FOG, SIGHT_RADIUS, MAP_MEMORY_VERSION } from '../src/world/mapMemory.js';
 import { createWorld } from '../src/world/world.js';
-import { createPlayer } from '../src/entities/player.js';
-import { planRoute, tryStep } from '../src/systems/movement.js';
+import { createGame, createTurnSystem } from '../src/core/game.js';
+import { planRoute } from '../src/systems/movement.js';
 import { decideTap } from '../src/ui/moveIntent.js';
 import * as text from '../src/ui/travelText.js';
 import { fitView, hexToScreen, visibleHexes } from '../src/render/gridView.js';
@@ -172,12 +172,13 @@ test('decideTap: unmapped hexes are explained, never routed to', () => {
 
 test('exploring a generated world: start reveals only nearby hexes; walking reveals the path corridor', () => {
   const world = createWorld('everwake', 40);
-  const player = createPlayer(world.sanctuary);
-  const m = createMapMemory(world.radius);
-  m.observe(player.position);
+  const game = createGame(world);
+  const { player, memory: m } = game;
+  const turns = createTurnSystem();
   assert.deepEqual(keys(m.knownHexes()), keys(hexesInRange(world.sanctuary, SIGHT_RADIUS)), 'only nearby tiles at start');
 
-  // Step to the edge of sight repeatedly, as the game does: tryStep then observe.
+  // Step to the edge of sight repeatedly, as the game does: one move action
+  // per hex, and the turn pipeline updates visibility.
   const visited = [player.position];
   for (let leg = 0; leg < 4; leg++) {
     const target = m.knownHexes()
@@ -187,8 +188,7 @@ test('exploring a generated world: start reveals only nearby hexes; walking reve
     assert.ok(target, `leg ${leg}: a mapped target at the edge of sight`);
     for (const step of target.r.path) {
       assert.ok(m.isKnown(step), 'every route hex was already mapped');
-      assert.ok(tryStep(player, world, step).ok);
-      m.observe(player.position);
+      assert.ok(turns.perform(game, { type: 'move', to: step }).ok);
       visited.push(player.position);
     }
   }

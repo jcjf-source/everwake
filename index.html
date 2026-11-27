@@ -44,9 +44,20 @@
       </button>
     </nav>
 
-    <p id="player-status" class="hud-status"></p>
+    <section class="hud-info" aria-label="Status">
+      <p id="player-status" class="hud-status"></p>
+      <div class="hud-clock">
+        <p id="clock-status" class="hud-status hud-status--clock" aria-live="polite"></p>
+        <button type="button" id="wait-button" class="hud-button hud-button--small"
+                title="Wait: let one turn pass where you stand">Wait</button>
+      </div>
+      <p id="inventory-status" class="hud-status hud-status--inventory" aria-label="Carried resources"></p>
+    </section>
 
-    <p id="selection-readout" class="hud-readout" aria-live="polite"></p>
+    <div class="hud-bottom">
+      <div id="gather-actions" class="hud-gather" role="group" aria-label="Gather" hidden></div>
+      <p id="selection-readout" class="hud-readout" aria-live="polite"></p>
+    </div>
 
     <noscript>
       <p class="noscript">Everwake needs JavaScript enabled to run.</p>
@@ -82,6 +93,7 @@
         <li><span class="map-key map-key--visible"></span>In sight</li>
         <li><span class="map-key map-key--remembered"></span>Remembered</li>
         <li><span class="map-key map-key--you"></span>You</li>
+        <li><span class="map-key map-key--resource"></span>Resource</li>
       </ul>
       <p class="world-dialog__note">Tap a mapped hex to look at it.</p>
       <div class="world-dialog__actions">

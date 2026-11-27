@@ -1,15 +1,14 @@
 /**
  * Player movement rules: route planning and single validated steps.
  *
- * Simulation only (no rendering or DOM). The only state change is
- * `tryStep`, which moves the player exactly one hex after validating it;
- * a rejected step changes nothing and costs no action. Long routes are
- * walked one `tryStep` at a time by the travel controller (travel.js), so
- * the player never teleports.
+ * Simulation only (no rendering or DOM). `checkStep` is the rule for a single
+ * one-hex step; the move action (src/core/actions.js) uses it, so every step,
+ * single or part of a route, goes through the turn pipeline (src/core/game.js)
+ * and costs one turn. Long routes are walked one move action at a time by the
+ * travel controller (travel.js), so the player never teleports.
  *
- * Terrain `moveCost` weights route choice (a road around a forest beats
- * pushing through it). Each hex entered currently counts as one action; how
- * move cost maps onto turns is decided with the turn system (Task 06).
+ * Terrain `moveCost` weights route choice only (a road around a forest beats
+ * pushing through it); every hex entered costs one turn.
  */
 import { TERRAIN } from '../data/terrain.js';
 import { hexDistance } from '../world/hex.js';
@@ -51,16 +50,13 @@ export function planRoute(world, from, to, { knows = null } = {}) {
 }
 
 /**
- * Move the player one hex. Validated: the target must be on the map,
- * adjacent, and walkable. On success the player's position changes and one
- * movement action is counted; on failure nothing changes.
+ * Can the player step to `to`? It must be on the map, adjacent, and
+ * walkable. Changes nothing.
  * @returns {{ ok: true } | { ok: false, reason: 'outside' | 'notAdjacent' | 'impassable' }}
  */
-export function tryStep(player, world, to) {
+export function checkStep(player, world, to) {
   if (!world.has(to)) return { ok: false, reason: 'outside' };
   if (hexDistance(player.position, to) !== 1) return { ok: false, reason: 'notAdjacent' };
   if (!world.isWalkable(to)) return { ok: false, reason: 'impassable' };
-  player.position = { q: to.q, r: to.r };
-  player.moves += 1;
   return { ok: true };
 }

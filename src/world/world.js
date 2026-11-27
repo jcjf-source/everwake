@@ -2,8 +2,9 @@
  * The generated world: a seed, a bounded hexagonal region of generated
  * tiles, and the sanctuary location.
  *
- * This is the immutable *world definition* (seed-driven). Mutable world
- * changes (depleted nodes, opened chests…) will live in a separate layer.
+ * This is the immutable *world definition* (seed-driven), including the
+ * generated resource nodes (resourceNodes.js). Mutable world changes
+ * (gathered nodes, later opened chests…) live in worldChanges.js.
  *
  * Expanding to chunks later: `createTerrainGenerator(seed).tileAt(q, r)` is
  * already a pure function of seed and coordinate, so a chunk is just the
@@ -16,6 +17,7 @@ import { hex, hexDistance, hexNeighbors, hexesInRange } from './hex.js';
 import { createHexGrid } from './hexGrid.js';
 import { createTerrainGenerator, GENERATOR_VERSION } from './worldGen.js';
 import { seedToNumber } from './seed.js';
+import { placeResourceNodes, RESOURCE_LAYOUT_VERSION } from './resourceNodes.js';
 
 const ORIGIN = hex(0, 0);
 
@@ -25,17 +27,19 @@ const ORIGIN = hex(0, 0);
  */
 export function createWorld(seed, radius) {
   const grid = createHexGrid(radius);
-  const gen = createTerrainGenerator(seedToNumber(seed));
+  const seedNumber = seedToNumber(seed);
+  const gen = createTerrainGenerator(seedNumber);
 
   // Dense storage for the bounded region: index = (r+R)*(2R+1) + (q+R).
   const span = 2 * radius + 1;
+  const indexOf = (h) => (grid.has(h) ? (h.r + radius) * span + (h.q + radius) : -1);
   const tiles = new Array(span * span).fill(null);
-  for (const h of grid.cells) tiles[(h.r + radius) * span + (h.q + radius)] = gen.tileAt(h.q, h.r);
+  for (const h of grid.cells) tiles[indexOf(h)] = gen.tileAt(h.q, h.r);
 
   /** @returns {import('./worldGen.js').Tile | null} */
   function tileAt(h) {
-    if (!grid.has(h)) return null;
-    return tiles[(h.r + radius) * span + (h.q + radius)];
+    const i = indexOf(h);
+    return i < 0 ? null : tiles[i];
   }
 
   const isWalkable = (h) => {
@@ -44,6 +48,7 @@ export function createWorld(seed, radius) {
   };
 
   const sanctuary = placeSanctuary(grid, tileAt, isWalkable, radius);
+  const resources = placeResourceNodes(seedNumber, grid.cells, tileAt, indexOf, sanctuary.hex);
 
   return Object.freeze({
     seed,
@@ -56,6 +61,11 @@ export function createWorld(seed, radius) {
     sanctuary: sanctuary.hex,
     /** Size of the walkable region reachable from the sanctuary. */
     reachableFromSanctuary: sanctuary.reachable,
+    resourceLayoutVersion: RESOURCE_LAYOUT_VERSION,
+    /** The generated resource node at a hex (baseline: never depleted), or null. */
+    resourceAt: resources.nodeAt,
+    /** Every generated resource node, in map row order. */
+    resourceNodes: resources.nodes,
   });
 }
 

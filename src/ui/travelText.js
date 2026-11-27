@@ -48,5 +48,9 @@ export const describeStopped = (label, done, total) =>
 export const describeBlocked = (at, done) =>
   `Route blocked at ${coordText(at)} · stopped after ${plural(done, 'step', 'steps')}`;
 
-/** Status line: position and the placeholder action counter. */
-export const describePlayer = (player) => `You · ${coordText(player.position)} · ${plural(player.moves, 'move', 'moves')}`;
+/** A reaction (an encounter, Task 09) interrupted travel after a step. */
+export const describeInterrupted = (label, done, total) =>
+  `Interrupted after ${done} of ${plural(total, 'step', 'steps')} · tap ${label} again to continue`;
+
+/** Status line: where the player is (time is shown by the clock, clockText.js). */
+export const describePlayer = (player) => `You · ${coordText(player.position)}`;

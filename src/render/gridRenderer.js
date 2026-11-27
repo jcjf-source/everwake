@@ -21,6 +21,7 @@ import { drawTerrainDetails, drawSanctuary } from './terrainArt.js';
 import { drawStepRim, drawRoute, drawNoWayMarker, drawPlayer } from './entityArt.js';
 import { FOG, canSee } from '../world/mapMemory.js';
 import { drawFogEdge } from './fogArt.js';
+import { drawResourceNodes, drawGatherTargets, NODE_MIN_SIZE } from './resourceArt.js';
 
 /** Veil over remembered (seen before, not in sight) hexes. */
 export const REMEMBERED_VEIL = 'rgba(14,20,22,0.58)';
@@ -76,7 +77,11 @@ function traceHex(ctx, cx, cy, size) {
  *   route?: { path: Array<{q:number,r:number}>, mode: 'preview' | 'travel' } | null,
  *   noWay?: {q:number,r:number} | null,
  *   fog?: { stateAt: (h: {q:number,r:number}) => number, isKnown: Function, isVisible: Function } | null,
- * }} frame `fog` omitted: everything is drawn as visible.
+ *   nodeAt?: ((h: {q:number,r:number}) => object | null) | null,
+ *   gatherable?: Array<{q:number,r:number}>,
+ * }} frame `fog` omitted: everything is drawn as visible. `nodeAt`: the
+ *   resource node state at a hex (gathering.js nodeState), asked only for
+ *   mapped hexes; `gatherable`: nodes in reach now (ringed).
  */
 export function drawGrid(ctx, frame) {
   const { width, height, view, cells, tileAt, sanctuary, ui } = frame;
@@ -118,6 +123,17 @@ export function drawGrid(ctx, frame) {
   const showSanctuary = sanctuary && (!fog || canSee(fog, { at: sanctuary, kind: 'landmark' }));
   if (showSanctuary && isOnScreen(view, sanctuary, width, height)) drawSanctuary(ctx, view, sanctuary);
 
+  // Resource nodes are landmarks: drawn once their hex is mapped (under the
+  // remembered veil when out of sight).
+  if (frame.nodeAt && size >= NODE_MIN_SIZE) {
+    const nodes = [];
+    for (const h of known) {
+      const n = frame.nodeAt(h);
+      if (n) nodes.push(n);
+    }
+    drawResourceNodes(ctx, view, nodes);
+  }
+
   // Remembered terrain: one batched veil over every remembered hex.
   if (fog) {
     ctx.beginPath();
@@ -135,8 +151,9 @@ export function drawGrid(ctx, frame) {
     drawFogEdge(ctx, view, cells, fog.stateAt);
   }
 
-  // Hexes the player can step to with one tap.
+  // Hexes the player can step to with one tap, and nodes they can gather now.
   if (frame.stepRim) drawStepRim(ctx, view, frame.stepRim);
+  if (frame.gatherable) drawGatherTargets(ctx, view, frame.gatherable);
 
   // Hover.
   if (ui.hovered && !(ui.selected && hexEquals(ui.hovered, ui.selected))) {

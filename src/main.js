@@ -29,13 +29,16 @@ async function boot() {
     { attachPointerInput },
     { createHud, describeSelection, coordText },
     { createWorldPanel },
-    { createPlayer },
-    { tryStep, planRoute },
+    { createGame, createTurnSystem },
+    { planRoute },
     { createTravel },
     { decideTap },
     text,
-    { createMapMemory, SIGHT_RADIUS },
+    clockText,
+    { timeOf },
     { createMapPanel },
+    { nodeState, gatherOptions },
+    gatherText,
   ] = await Promise.all([
     import('./render/canvasSurface.js'),
     import('./render/camera.js'),
@@ -48,13 +51,16 @@ async function boot() {
     import('./ui/pointerInput.js'),
     import('./ui/hud.js'),
     import('./ui/worldPanel.js'),
-    import('./entities/player.js'),
+    import('./core/game.js'),
     import('./systems/movement.js'),
     import('./systems/travel.js'),
     import('./ui/moveIntent.js'),
     import('./ui/travelText.js'),
-    import('./world/mapMemory.js'),
+    import('./ui/clockText.js'),
+    import('./core/clock.js'),
     import('./ui/mapPanel.js'),
+    import('./systems/gathering.js'),
+    import('./ui/gatherText.js'),
   ]);
 
   const canvas = document.getElementById('world-canvas');
@@ -73,20 +79,29 @@ async function boot() {
     window.history.replaceState(null, '', url);
   }
 
-  let world = createWorld(seedFromUrl() ?? randomSeed(), WORLD_RADIUS);
+  // Game state (core/game.js): the world, the player (expedition state:
+  // position and inventory), map memory (player persistent state: only
+  // known/unknown is saved, Task 13), world changes (gathered nodes), the
+  // world clock and the log. `world`, `player` and `memory` are
+  // shorthands for the current game's parts, not separate state.
+  let game, world, player, memory;
+  function useGame(next) {
+    game = next;
+    ({ world, player, memory } = next);
+  }
+  useGame(createGame(createWorld(seedFromUrl() ?? randomSeed(), WORLD_RADIUS)));
   writeSeedToUrl(world.seed);
 
-  // Expedition state: the player's position and move counter.
-  let player = createPlayer(world.sanctuary);
-  // Player persistent state: what the player has mapped (fog of war). Only
-  // known/unknown is saved (Task 13); what is visible follows the player.
-  let memory = createMapMemory(world.radius);
-  memory.observe(player.position, SIGHT_RADIUS);
+  // Every player action goes through this pipeline: validate, apply, advance
+  // the clock, reactions (enemies/environment from Task 09), visibility, log,
+  // save (Task 13). Invalid actions cost no turn; nothing happens while idle.
+  const turns = createTurnSystem({ reactions: [], onSave: null });
 
   // UI/view state only: nothing here is game/world state and none is saved.
   // `preview` is a planned route awaiting confirmation; `noWay` marks a hex
-  // that cannot be reached; `selected` is the hex the readout talks about.
-  const ui = { hovered: null, selected: null, showCoords: false, preview: null, noWay: null };
+  // that cannot be reached; `selected` is the hex the readout talks about;
+  // `travelTarget` is the node a route is walking next to, if any.
+  const ui = { hovered: null, selected: null, showCoords: false, preview: null, noWay: null, travelTarget: null };
   let readoutText = text.MOVE_HINT;
   let cam = null; // created once the canvas has a size
 
@@ -96,18 +111,27 @@ async function boot() {
   };
   const labelOf = (h) => text.placeLabel(h, terrainOf(h), world.sanctuary);
 
-  /**
-   * The one way the player moves (single steps and each travel step):
-   * a validated step, then look around from the new hex.
-   */
-  function stepPlayer(to) {
-    const result = tryStep(player, world, to);
-    if (result.ok) memory.observe(player.position, SIGHT_RADIUS);
+  // Resource nodes as the player knows them: only on mapped hexes.
+  const nodeInfo = (h) => (h && memory.isKnown(h) ? nodeState(game, h) : null);
+  const liveNodeAt = (h) => { const s = nodeInfo(h); return s && s.left > 0 ? s : null; };
+  const noteFor = (h) => gatherText.nodeNote(nodeInfo(h));
+  // Nodes in reach right now (none while travelling: a tap stops travel first).
+  const currentGatherOptions = () => (travel.active ? [] : gatherOptions(game));
+
+  // Events (e.g. a new day part) from the most recent successful action,
+  // appended to the readout that describes that action.
+  let lastEvents = [];
+
+  /** Perform one action through the turn pipeline. */
+  function act(action) {
+    const result = turns.perform(game, action);
+    lastEvents = result.ok ? result.events : [];
     return result;
   }
 
+  // Each travel step is its own move action, and so its own turn.
   const travel = createTravel({
-    step: stepPlayer,
+    step: (to) => act({ type: 'move', to }),
     onEvent: onTravelEvent,
   });
 
@@ -130,6 +154,8 @@ async function boot() {
         route,
         noWay: ui.noWay,
         fog: memory,
+        nodeAt: nodeInfo,
+        gatherable: currentGatherOptions().map((o) => o.at),
       });
     },
     report,
@@ -183,6 +209,12 @@ async function boot() {
   function refresh() {
     hud.showReadout(readoutText);
     hud.showStatus(text.describePlayer(player));
+    hud.showClock(clockText.describeClock(game.clock.turn), timeOf(game.clock.turn).part);
+    hud.setWaitEnabled(!travel.active);
+    hud.showInventory(gatherText.inventoryEntries(player.inventory));
+    hud.showGather(currentGatherOptions().map((o) => ({
+      key: `${o.at.q},${o.at.r}`, resource: o.node.resource, ...gatherText.gatherButton(o),
+    })));
     surface.requestRepaint();
     mapPanel.refresh();
   }
@@ -190,17 +222,29 @@ async function boot() {
   function onTravelEvent(e) {
     const label = labelOf(e.destination);
     if (e.type === 'step') {
-      readoutText = text.describeTravelling(label, e.done, e.total);
+      readoutText = clockText.withEvents(text.describeTravelling(label, e.done, e.total), lastEvents);
     } else if (e.type === 'arrived') {
-      ui.selected = null;
-      readoutText = text.describeArrived(label, e.total);
-    } else if (e.type === 'stopped') {
-      // Keep the rest of the route as a preview: tapping the destination resumes.
+      // Walking next to a node: keep it selected and say it is in reach.
+      const target = ui.travelTarget;
+      ui.travelTarget = null;
+      ui.selected = target;
+      readoutText = clockText.withEvents(text.describeArrived(label, e.total) + noteFor(target ?? e.destination), lastEvents);
+    } else if (e.type === 'stopped' || e.type === 'interrupted') {
+      // Keep the rest of the route as a preview: tapping the destination (or
+      // the node it leads to) resumes.
       const rest = planRoute(world, player.position, e.destination, { knows: memory.isKnown });
-      ui.preview = rest.status === 'ok' ? { destination: e.destination, path: rest.path, cost: rest.cost } : null;
-      readoutText = text.describeStopped(label, e.done, e.total);
+      const target = ui.travelTarget;
+      ui.travelTarget = null;
+      ui.preview = rest.status === 'ok'
+        ? { destination: e.destination, path: rest.path, cost: rest.cost, ...(target ? { target } : {}) }
+        : null;
+      const resumeLabel = target ? labelOf(target) : label;
+      readoutText = e.type === 'stopped'
+        ? text.describeStopped(resumeLabel, e.done, e.total)
+        : clockText.withEvents(text.describeInterrupted(resumeLabel, e.done, e.total), lastEvents);
     } else if (e.type === 'blocked') {
       ui.preview = null;
+      ui.travelTarget = null;
       ui.noWay = e.at;
       ui.selected = e.at;
       readoutText = text.describeBlocked(e.at, e.done);
@@ -220,13 +264,15 @@ async function boot() {
       case 'here':
         ui.preview = null;
         ui.selected = player.position;
-        readoutText = `${describeSelection(player.position, terrainOf(player.position), world.sanctuary)} · you are here`;
+        readoutText = `${describeSelection(player.position, terrainOf(player.position), world.sanctuary)} · you are here${noteFor(player.position)}`;
         break;
       case 'step': {
         ui.preview = null;
         ui.selected = null;
-        const result = stepPlayer(action.to);
-        readoutText = result.ok ? text.describeStepped(labelOf(action.to)) : text.describeImpassable(labelOf(action.to));
+        const result = act({ type: 'move', to: action.to });
+        readoutText = result.ok
+          ? clockText.withEvents(text.describeStepped(labelOf(action.to)) + noteFor(action.to), lastEvents)
+          : text.describeImpassable(labelOf(action.to));
         if (result.ok) followPlayer();
         break;
       }
@@ -234,12 +280,37 @@ async function boot() {
         const p = action.preview;
         ui.preview = p;
         ui.selected = p.destination;
-        readoutText = text.describePreview(labelOf(p.destination), p.path.length, p.cost);
+        readoutText = text.describePreview(labelOf(p.destination), p.path.length, p.cost) + noteFor(p.destination);
         break;
       }
+      case 'approach': {
+        const p = action.preview;
+        ui.preview = p;
+        ui.selected = p.target;
+        readoutText = gatherText.describeApproach(labelOf(p.target), nodeInfo(p.target), p.path.length, p.cost);
+        break;
+      }
+      case 'node':
+        ui.preview = null;
+        ui.selected = action.at;
+        readoutText = gatherText.describeInReach(labelOf(action.at), nodeInfo(action.at));
+        break;
+      case 'blocked':
+        ui.preview = null;
+        ui.selected = action.at;
+        ui.noWay = action.at;
+        readoutText = gatherText.describeNodeBlocked(labelOf(action.at), nodeInfo(action.at));
+        break;
       case 'travel':
         ui.preview = null;
-        ui.selected = action.preview.destination;
+        ui.selected = action.preview.target ?? action.preview.destination;
+        ui.travelTarget = action.preview.target ?? null;
+        if (action.preview.path.length === 0) {
+          // Already next to the node (the approach hex is where you stand).
+          ui.travelTarget = null;
+          readoutText = gatherText.describeInReach(labelOf(action.preview.target), nodeInfo(action.preview.target));
+          break;
+        }
         travel.start(action.preview.path); // first step now; onTravelEvent updates the readout
         break;
       case 'unexplored':
@@ -252,9 +323,9 @@ async function boot() {
         ui.preview = null;
         ui.selected = action.at;
         ui.noWay = action.at;
-        readoutText = action.kind === 'impassable'
+        readoutText = (action.kind === 'impassable'
           ? text.describeImpassable(labelOf(action.at))
-          : text.describeUnreachable(labelOf(action.at));
+          : text.describeUnreachable(labelOf(action.at))) + noteFor(action.at);
         break;
     }
   }
@@ -262,7 +333,10 @@ async function boot() {
   function handleTap(h) {
     const { stop, action } = decideTap(
       world,
-      { position: player.position, preview: ui.preview, travelling: travel.destination, knows: memory.isKnown },
+      {
+        position: player.position, preview: ui.preview, travelling: travel.destination,
+        travelTarget: ui.travelTarget, knows: memory.isKnown, nodeAt: liveNodeAt,
+      },
       h,
     );
     if (stop) travel.stop();
@@ -278,6 +352,10 @@ async function boot() {
       zoomIn: document.getElementById('zoom-in'),
       zoomOut: document.getElementById('zoom-out'),
       recenter: document.getElementById('recenter'),
+      clock: document.getElementById('clock-status'),
+      wait: document.getElementById('wait-button'),
+      inventory: document.getElementById('inventory-status'),
+      gather: document.getElementById('gather-actions'),
     },
     {
       onToggleCoords(on) {
@@ -290,6 +368,29 @@ async function boot() {
       },
       onRecenter() {
         updateCamera(camera.centerOnHex(cam, player.position));
+      },
+      onWait() {
+        if (travel.active) return; // the button is disabled while travelling
+        const result = act({ type: 'wait' });
+        if (result.ok) {
+          ui.noWay = null;
+          readoutText = clockText.withEvents(clockText.WAITED, lastEvents);
+        }
+        refresh();
+      },
+      onGather(index) {
+        // Buttons are rebuilt on every refresh, so `index` names a current
+        // option; the action is still validated by the turn pipeline.
+        const option = currentGatherOptions()[index];
+        if (!option) return;
+        const result = act({ type: 'gather', at: option.at });
+        ui.preview = null;
+        ui.noWay = null;
+        ui.selected = option.at;
+        readoutText = result.ok
+          ? clockText.describeEvents(lastEvents)
+          : gatherText.describeGatherRefused(result.reason, labelOf(option.at));
+        refresh();
       },
     },
   );
@@ -309,13 +410,10 @@ async function boot() {
     {
       onCreate(seed) {
         travel.stop({ silent: true });
-        world = createWorld(seed, WORLD_RADIUS);
-        player = createPlayer(world.sanctuary);
-        memory = createMapMemory(world.radius);
-        memory.observe(player.position, SIGHT_RADIUS);
+        useGame(createGame(createWorld(seed, WORLD_RADIUS)));
         writeSeedToUrl(world.seed);
         worldPanel.showSeed(world.seed);
-        Object.assign(ui, { selected: null, hovered: null, preview: null, noWay: null });
+        Object.assign(ui, { selected: null, hovered: null, preview: null, noWay: null, travelTarget: null });
         readoutText = text.MOVE_HINT;
         refresh();
         updateCamera(camera.centerOnHex(cam, player.position));
@@ -343,6 +441,7 @@ async function boot() {
           ui: { hovered: null, selected: null, showCoords: false },
           player: player.position,
           fog: memory,
+          nodeAt: nodeInfo,
         });
         return view;
       },
@@ -354,7 +453,7 @@ async function boot() {
         ui.preview = null;
         ui.noWay = null;
         ui.selected = h;
-        readoutText = describeSelection(h, terrainOf(h), world.sanctuary);
+        readoutText = describeSelection(h, terrainOf(h), world.sanctuary) + noteFor(h);
         refresh();
         updateCamera(camera.centerOnHex(cam, h));
       },

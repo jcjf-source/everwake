@@ -126,13 +126,47 @@ html, body {
 
 .world-canvas { cursor: grab; }
 
-.hud-readout {
+/* Bottom centre: contextual actions (Gather) above the feedback readout. */
+.hud-bottom {
   position: absolute;
   left: 50%;
   bottom: max(0.8rem, env(safe-area-inset-bottom));
   transform: translateX(-50%);
   width: max-content;
   max-width: calc(100vw - 2rem);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.45rem;
+  pointer-events: none;
+}
+.hud-gather {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.4rem;
+  pointer-events: none;
+}
+.hud-gather[hidden] { display: none; }
+.hud-button--gather {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45em;
+  color: var(--parchment);
+  border-color: rgba(194, 163, 90, 0.65);
+}
+.hud-button--gather::before {
+  content: "";
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+  background: var(--res, var(--gold));
+}
+.hud-button__where { color: var(--gold); font-size: 0.95em; }
+
+.hud-readout {
+  width: max-content;
+  max-width: 100%;
   margin: 0;
   padding: 0.5rem 0.9rem;
   font-size: 0.85rem;
@@ -144,12 +178,25 @@ html, body {
   pointer-events: none;
 }
 
-/* Player status (position and move count): under the title, top left. */
-.hud-status {
+/* Status block under the title, top left: player position, then the world
+   clock with the Wait button beside it. */
+.hud-info {
   position: absolute;
   top: calc(max(0.6rem, env(safe-area-inset-top)) + 52px);
   left: max(1rem, env(safe-area-inset-left));
   max-width: calc(100vw - 6rem);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.35rem;
+  pointer-events: none;
+}
+.hud-clock {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.hud-status {
   margin: 0;
   padding: 0.3rem 0.6rem;
   font-size: 0.78rem;
@@ -161,6 +208,45 @@ html, body {
   pointer-events: none;
 }
 .hud-status:empty { display: none; }
+
+/* Clock: a small mark tinted by day part before the text. */
+.hud-status--clock { color: var(--parchment); }
+.hud-status--clock::before {
+  content: "";
+  display: inline-block;
+  width: 0.6rem;
+  height: 0.6rem;
+  margin-right: 0.45rem;
+  vertical-align: -0.05rem;
+  border-radius: 50%;
+  background: #e9c46a;
+}
+.hud-status--clock[data-part="afternoon"]::before { background: #f4a259; }
+.hud-status--clock[data-part="evening"]::before { background: #c8553d; }
+.hud-status--clock[data-part="night"]::before {
+  background: transparent;
+  box-shadow: inset -0.2rem 0 0 0 #b8c7e0; /* crescent */
+}
+
+.hud-button--small { padding: 0 0.8rem; }
+
+/* Carried resources: a coloured dot per resource. */
+.hud-status--inventory { color: var(--parchment); }
+.inv-item { white-space: nowrap; }
+.inv-item::before {
+  content: "";
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  margin-right: 0.3rem;
+  border-radius: 50%;
+  background: var(--res, var(--fog));
+}
+.inv-item--empty { color: var(--fog); }
+[data-resource="wood"] { --res: rgb(168, 120, 76); }
+[data-resource="stone"] { --res: rgb(178, 180, 172); }
+[data-resource="herbs"] { --res: rgb(150, 196, 110); }
+[data-resource="food"] { --res: rgb(206, 92, 84); }
 
 .noscript {
   position: absolute;
@@ -339,6 +425,7 @@ html, body {
 .map-key--visible { background: rgb(84, 100, 70); }
 .map-key--remembered { background: rgb(42, 52, 44); }
 .map-key--you { background: rgb(236, 230, 212); border-radius: 50%; border-color: rgb(22, 30, 27); }
+.map-key--resource { background: rgb(168, 120, 76); border-radius: 50%; border: none; transform: scale(0.6); }
 /* Short landscape phones: keep the whole map dialog on screen without scrolling. */
 @media (max-height: 500px) {
   .map-dialog .world-dialog__form { padding: 0.6rem 0.9rem 0.7rem; }

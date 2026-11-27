@@ -1,13 +1,13 @@
 /**
- * The player's expedition state for movement: where they stand and how
- * many movement actions they have taken.
+ * The player's expedition state: where they stand and what they carry.
  *
- * `moves` is a placeholder action counter (one per hex entered) until the
- * formal turn system arrives in Task 06. This is expedition state; it is
- * not saved yet (persistence is Task 13).
+ * Elapsed time is not kept here: the world clock (src/core/clock.js) is the
+ * one turn counter. This is expedition state; it is not saved yet
+ * (persistence is Task 13).
  */
+import { createInventory } from '../systems/inventory.js';
 
 /** @param {{ q: number, r: number }} position usually the sanctuary */
 export function createPlayer(position) {
-  return { position: { q: position.q, r: position.r }, moves: 0 };
+  return { position: { q: position.q, r: position.r }, inventory: createInventory() };
 }

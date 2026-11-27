@@ -19,7 +19,7 @@ This document records implementation decisions. Decisions may evolve, but change
 - `src/data/`: terrain, items, enemy definitions, upgrade definitions.
 Names are suggestions; keep structure simple and consistent with the actual project.
 
-## Current project layout (Tasks 00–05)
+## Current project layout (Tasks 00–07)
 - `index.html` at the repository root is the entry point; `css/main.css` holds styles; `src/main.js` boots the app.
 - `src/main.js` statically imports only `src/core/errorReporter.js`, then loads everything else with dynamic `import()`. That way a failure in any later module still appears on screen.
 - `src/render/canvasSurface.js` sizes the canvas to its CSS box at `devicePixelRatio` (capped at 3) and sets the context transform so drawing uses CSS pixels. It repaints on resize and when `requestRepaint()` is called (at most once per animation frame). There is no continuous loop. `getSize()` returns the canvas box in CSS pixels.
@@ -46,7 +46,7 @@ Names are suggestions; keep structure simple and consistent with the actual proj
 - `src/ui/hud.js`: the selection readout, the Coordinates toggle (`aria-pressed`), and the + / − / Centre buttons.
   - Zoom buttons step ×1.25 about the viewport centre and are disabled at the zoom limits.
   - Centre recentres on the player (Task 04; previously the selected hex or the sanctuary).
-  - The readout is the single feedback line: the movement hint, the inspected hex, the route preview, travel progress, or why a hex cannot be reached. `#player-status` shows position and move count.
+  - The readout is the single feedback line: the movement hint, the inspected hex, the route preview, travel progress, or why a hex cannot be reached. `#player-status` shows position; `#clock-status` shows the day part, day and turn (Task 06), with the Wait button beside it.
 - `src/ui/worldPanel.js`: the Seed button and a `<dialog>` for a new world (typed or Random seed, Cancel, Replace world). Replacing is a deliberate second step, never a single tap. The seed lives in the URL query (`?seed=`) until persistence exists (Task 13). An invalid or missing URL seed falls back to a random seed.
 - UI and view state (`hovered`, `selected`, `showCoords`, camera) live in `main.js`. They are not game state and are not saved. The current `world` object is replaced as a whole when a new seed is chosen.
 - The Task 00 placeholder title scene (`placeholderScene.js`) was removed in Task 01 now that the grid is the main view.
@@ -62,17 +62,17 @@ Names are suggestions; keep structure simple and consistent with the actual proj
   - It uses a binary heap ordered by (f, h, insertion order), so results are deterministic.
   - It returns `{ found, path (start…goal), cost }`, or a `reason`: `blocked` (goal impassable), `unreachable`, or `limit` (the `maxExpanded` cap; kept for an unbounded world later).
   - A failed search on the radius-40 map explores at most the start's region, which takes a few ms.
-- **Player** (`src/entities/player.js`): `{ position, moves }` is expedition state. `moves` is a placeholder action counter, one per hex entered, until the turn system (Task 06). It is not saved yet.
+- **Player** (`src/entities/player.js`): `{ position }` is expedition state. Elapsed time lives only in the world clock (Task 06). It is not saved yet.
 - **Rules** (`src/systems/movement.js`):
   - `planRoute(world, from, to)` returns `here | outside | impassable | unreachable | ok`; the `ok` path excludes the start.
-  - `tryStep(player, world, to)` is the only movement state change. It checks the target is on the map, adjacent, and walkable. A rejected step changes nothing.
-  - **Turn cost (decision for Task 06):** terrain `moveCost` currently only weights route choice. Each hex entered counts as one move, as the task specifies. This differs from the comment in `terrain.js` ("turns to enter the tile"); Task 06 should decide whether rough terrain costs extra turns.
+  - `checkStep(player, world, to)` is the one-hex step rule: on the map, adjacent, walkable. It changes nothing; the `move` action (Task 06) uses it and applies the step.
+  - **Turn cost (decided in Task 06):** one turn per hex entered, whatever the terrain. Terrain `moveCost` only weights route choice.
 - **Travel** (`src/systems/travel.js`): `createTravel({ step, onEvent, delay, schedule, cancel })` walks a path by calling `step` once per hex.
   - The first step happens immediately, then one every `STEP_DELAY_MS` (150 ms). The delay is presentation pacing only; nothing runs while idle, and no timer survives the end of travel.
   - Events: `step`, `arrived`, `stopped`, `blocked` (a re-validated step failed).
   - `stop()` interrupts between steps, and `start()` silently replaces an active route.
   - The timer is injectable, so tests drive it deterministically.
-  - Task 06 should route each step through the action pipeline, so encounters can interrupt travel through the same `stop()`.
+  - Each step is a `move` action through the turn pipeline (Task 06). A step result with `interrupt` (from a reaction) ends travel after that step with an `interrupted` event; the rest of the route stays previewed, as after a stop.
 - **Tap intent** (`src/ui/moveIntent.js`): `decideTap(world, { position, preview, travelling }, hex)` is pure and returns `{ stop, action }`.
   - Idle taps:
     - your own hex: inspect it;
@@ -99,7 +99,7 @@ Names are suggestions; keep structure simple and consistent with the actual proj
 - **State model:** map memory is *player persistent state* (it survives death; see "State model"). `main.js` holds it beside `world` and `player` and replaces it when a new world is created.
   - `serialize()` returns `{ version: 1, radius, known }`, where `known` is a base64 bitset of known hexes in row order. Visibility is not saved; it is recomputed with `observe(player.position)` after loading.
   - `restoreMapMemory(data, radius)` returns `{ ok, memory }` or `{ ok: false, error }` for a wrong version, a radius mismatch, bad base64 or a wrong length, and never half-applies. Nothing calls it yet (Task 13).
-- **Update point:** `main.js` `stepPlayer` is the only way the player moves (single taps and every travel step): `tryStep`, then `observe` on success. A rejected step reveals nothing. In the Task 06 pipeline this is the "update visibility" stage.
+- **Update point:** the turn pipeline's visibility stage (`src/core/game.js`) calls `observe` after every successful action. A rejected action reveals nothing.
 - **Entities:** `canSee(memory, { at, kind })`: a `landmark` (sanctuary, POIs) is shown once its hex is known; a `mobile` entity (enemies) only while its hex is visible. The renderer uses it for the sanctuary; Task 09 should use it for enemies and for any enemy readouts.
 - **No leaks through movement:** `planRoute(world, from, to, { knows })` treats unknown hexes as impassable and returns `unexplored` for an unknown destination before it checks walkability. `decideTap` takes `knows` in its state and returns `{ kind: 'unexplored', at }`. Neighbours are always within sight, so single steps are unaffected. A known hex reachable only through unknown land reads as "cut off" until more is mapped.
 - **Rendering** (`gridRenderer.js`, `frame.fog`): unknown hexes are skipped entirely, so only the background shows, and hidden terrain cannot be inferred from colour or outline. Remembered hexes get one batched veil (`REMEMBERED_VEIL`) drawn over terrain, details and the sanctuary. Overlays (route, player, highlights) are drawn above the veil. Without `frame.fog`, everything is drawn as visible.
@@ -167,6 +167,62 @@ Keep the distinction between:
 ## Turn/action pipeline
 Actions should be explicit and validated. Suggested pipeline: validate action → apply player action → advance turn/clock → enemy/environment response → update visibility → emit log/events → save. Ensure invalid actions do not consume a turn. Path-following invokes one movement action per step and can be interrupted.
 
+### Implementation (Task 06)
+- **Game state** (`src/core/game.js`): `createGame(world)` returns `{ world, player, memory, clock, log }`: the player on the sanctuary, map memory with the start observed, the clock at turn 0. `main.js` holds one `game` and replaces it whole for a new world; its `world`/`player`/`memory` variables are shorthands for the game's parts.
+- **Actions** (`src/core/actions.js`): plain objects `{ type, ...params }`. Each definition has `cost` (integer ≥ 1), `validate` (must not change anything) and `apply`. Current actions: `move { to }` (adjacent walkable hex, 1 turn) and `wait` (1 turn). `validateAction` also rejects non-objects (`badAction`), unknown types (own properties only: `unknownAction`) and malformed targets (`badTarget`).
+- **Not actions:** inspecting, previewing or planning routes, panning, zooming, the Map and Seed dialogs. They change UI state only and never take a turn.
+- **Pipeline** (`createTurnSystem({ reactions, onSave, sightRadius }).perform(game, action)`):
+  1. validate: on failure return `{ ok: false, action, reason }`; nothing changed, logged, reacted or saved;
+  2. apply the player's effect;
+  3. advance the clock by `cost`; a day-part boundary adds a `dayPart` event;
+  4. reactions, in registration order: `(game, { action, turn, time })` may return `{ events, interrupt }`. They see the applied action and the new turn but the previous visibility. The first `interrupt` wins. None are registered yet (enemies: Task 09);
+  5. visibility: `memory.observe(player.position)`;
+  6. log: events appended to `game.log` (plain data, newest last, capped at `LOG_LIMIT` = 100);
+  7. save: `onSave(game, result)` (`null` until Task 13).
+  It returns `{ ok: true, action, cost, turn, time, events, revealed, interrupt }`.
+- **Clock** (`src/core/clock.js`): `{ turn }` is the only time state. `timeOf(turn)` derives `{ day (from 1), part, partIndex, turnInPart }`. Four day parts (morning, afternoon, evening, night) of `TURNS_PER_DAY_PART` = 12 turns, so 48 turns a day (about half an hour per turn); turn 0 is day 1, morning. `advanceClock` reports `partChanged`/`dayChanged`. `serializeClock`/`restoreClock` give a versioned, validated save form (`{ version: 1, turn }`), not called yet (Task 13). Day parts have no gameplay effect yet; sight, enemies and events can read `timeOf` later.
+- **Idle:** nothing advances time except `perform`. Travel's 150 ms step delay is pacing only: each step is a separate `perform`, and stopping leaves no timer.
+- **UI:** `src/ui/clockText.js` formats the clock ("Morning · day 1 · turn 0") and events ("Evening draws in", "Day 2 dawns"); an action's events are appended to its readout line. The clock chip has a day-part mark (`data-part`). **Wait** is disabled while travelling (taps already stop travel; disabling avoids a button that does two things). There is no log panel yet; `game.log` is kept for the journal/log UI (Task 14).
+
+## Resources and gathering (Task 07)
+- **Data** (`src/data/resources.js`): `RESOURCES` (wood, stone, herbs, food) and `NODE_KINDS`: `deadfall` (wood), `looseStone` (stone), `herbPatch` (herbs), `berryBushes` (food, land only), `fishShoal` (food, water only). Each kind has `yield` (units per gather: 2 for wood and stone, 1 otherwise) and `uses` [min, max] (gathers before it is spent). `nodeKindFor(resource, terrain)` picks the kind; `validateNodeKind` is tested.
+- **Placement** (`src/world/resourceNodes.js`, *world definition*): `nodeForTile(seedNumber, tile)` is pure.
+  - A hex holds a node if `hash(seed, q, r, 1) < NODE_DENSITY (0.15) × the terrain's best suitability`.
+  - The resource is drawn from a second hash, weighted by suitability (`TERRAIN[...].resources`), and `uses` from a third.
+  - The sanctuary hex never holds one.
+  - `createWorld` adds `resourceAt(h)`, `resourceNodes` (row order) and `resourceLayoutVersion` (`RESOURCE_LAYOUT_VERSION` = 1; a golden test guards it). The everwake map has 490 nodes (about 10%).
+  - Nodes can sit on impassable hexes (mountain stone, deep-water fish).
+- **World changes** (`src/world/worldChanges.js`, *persistent world changes*): `game.changes` records gathers taken per hex (`gathersTaken`, `recordGather`). Remaining = `node.uses − gathersTaken`; the generated node is never modified.
+  - `serialize()` → `{ version: 1, gathered: [[q, r, taken], …] }` (sorted).
+  - `restoreWorldChanges` validates it (version, shape, positive counts, no duplicates) and never half-applies. Nothing calls it yet (Task 13).
+  - There is no regrowth: spent stays spent.
+- **Inventory** (`src/systems/inventory.js`, *expedition state*): `player.inventory = { items: { id: count } }` with `countOf` and `addItem`. It is kept minimal; Task 11 builds items, equipment and carry capacity on it.
+- **Rules** (`src/systems/gathering.js`):
+  - `nodeState(game, h)` returns `{ at, node, def, left }`.
+  - `checkGather(game, at)` checks in this order: `outside`, `unexplored` (so nothing about an unmapped hex leaks), `noNode`, `tooFar` (more than `GATHER_REACH` = 1 hex), `depleted`.
+  - `gatherFrom` records one gather, adds the yield, and returns a `gathered` event.
+  - `gatherOptions(game)` lists the nodes in reach: own hex first, then neighbours in `DIRECTIONS` order.
+  - `planApproach(world, from, target, { knows })` finds the cheapest mapped route to a walkable neighbour of `target`, or `null`.
+- **Action:** `gather { at }`, cost 1 (`src/core/actions.js`). `apply` may now return `{ events }`; the pipeline puts the action's own events before the clock's `dayPart` event. Gathers go into `game.log`.
+- **Tap intent:** `decideTap` takes `nodeAt` (a mapped hex with a node that has gathers left) and `travelTarget`. For an *impassable* hex with a live node:
+  - `node` when adjacent (inspect; gather with the button);
+  - otherwise `approach`: a preview `{ destination: approach hex, target: node, path, cost }`. Tapping the node again (`preview.target`) travels;
+  - `blocked` when `planApproach` finds no route.
+  A spent node there is plain `impassable`. Walkable node hexes keep the normal step/preview behaviour (you gather standing on them). While walking to a node, tapping it only stops. Stop/interrupt keeps `target` on the remaining preview, so one tap on the node resumes.
+- **UI** (`main.js`, `hud.js`, `src/ui/gatherText.js`):
+  - **Gather buttons:** `#gather-actions` holds one button per option ("Gather wood", plus "here" or a direction arrow; the accessible name spells out node, direction and gathers left). It is hidden when there are none and while travelling. The buttons are rebuilt only when the set changes, and a click still goes through the pipeline.
+  - **Inventory:** `#inventory-status` shows "Wood n · Stone n · Herbs n · Food n" with colour dots.
+  - **Readouts:** readouts about a mapped node hex append `nodeNote` ("· Deadfall (wood) · 2 gathers left" / "· … · picked clean"). After a gather, the readout is the turn's events (`clockText.describeEvents`).
+  - **Layout:** `.hud-bottom` stacks the Gather row above the readout.
+- **Rendering** (`src/render/resourceArt.js`):
+  - **Glyphs:** a node glyph sits on a dark disc at (0.34, 0.4)·size from the hex centre, clear of the player figure. Glyphs are batched per kind.
+  - **Zoom levels:** below a 12px hex they are coloured dots, and below 6px nothing is drawn.
+  - **Spent nodes:** a faint dashed ring.
+  - **Fog:** nodes are drawn after the sanctuary and before the remembered veil, only on mapped hexes (landmarks).
+  - **Gather rings:** `drawGatherTargets` rings the nodes in reach after the step rim.
+  - The Map dialog also draws nodes.
+  - Drag cost at minimum zoom is unchanged (about 0.5–0.6 ms script per frame).
+
 ## Rendering and input
 - Canvas handles world rendering; DOM/CSS handles panels and UI controls.
 - Camera transform must be shared by rendering and hit-testing.
@@ -184,7 +240,7 @@ Actions should be explicit and validated. Suggested pipeline: validate action �
 - Unit tests for hex geometry, coordinate conversions, distance, neighbors, deterministic generation, and pathfinding.
 - Integration/manual checks for movement, action turn costs, fog updates, encounter interruption, death return, and persistence across reload.
 - Avoid brittle tests tied to exact visual pixels unless rendering tests are available.
-- Browser checks live in `tools/browser/` (Node 22+, Chrome). `check-world.mjs` (`npm run check:browser`, `VIEWPORT=<fragment>` for one viewport) taps predicted hexes in headless Chrome across four viewports and drives the movement flows (it reads the player position from `#player-status`; seed `island-133` provides a cut-off islet for the unreachable case). It computes the expected readout in Node from the same pure modules, so it must be updated when the readout or UI flows change. Since Task 05 it also mirrors map memory: it calls `observe` for every hex the player is known to have stood on, and explores toward impassable or unreachable targets before tapping them. `perf.mjs` (`npm run perf`) measures drag frame times. Pitfalls are listed at the top of `tools/browser/cdp.mjs`: no `--disable-gpu`, keep taps away from buttons, and DPR-halved wheel deltas.
+- Browser checks live in `tools/browser/` (Node 22+, Chrome). `check-world.mjs` (`npm run check:browser`, `VIEWPORT=<fragment>` for one viewport) taps predicted hexes in headless Chrome across four viewports and drives the movement flows (it reads the player position from `#player-status`; seed `island-133` provides a cut-off islet for the unreachable case, and since Task 07 seed `shore-42` has mountain stone near the start for the approach-a-node flow). It computes the expected readout in Node from the same pure modules, so it must be updated when the readout or UI flows change. Since Task 05 it also mirrors map memory: it calls `observe` for every hex the player is known to have stood on, and explores toward impassable or unreachable targets before tapping them. `perf.mjs` (`npm run perf`) measures drag frame times. Pitfalls are listed at the top of `tools/browser/cdp.mjs`: no `--disable-gpu`, keep taps away from buttons, and DPR-halved wheel deltas.
 
 ## Decisions log
 - 2026-11-27: Prototype targets static browser hosting; plain JavaScript/Canvas is the default to reduce setup and deployment complexity.
@@ -197,5 +253,7 @@ Actions should be explicit and validated. Suggested pipeline: validate action �
 - 2026-11-27 (Task 02): The camera stores a world-space centre and a zoom level, and works as pure functions. The world unit is fixed at `BASE_HEX_SIZE = 32` (hex pixel space at zoom 1). Zoom is limited to 0.4–2.5. Moves are instant, with no tweening: the camera changes only on input and repaints on demand.
 - 2026-11-27 (Task 03): Terrain is generated per coordinate from continuous seeded noise plus neighbour-local rules, never from sequential random draws, so it is independent of generation or draw order and ready for chunking. Gameplay terrain properties (`src/data/terrain.js`) are kept separate from presentation (`src/render/terrainStyle.js`, `terrainArt.js`). Until saving exists, the world seed is kept in the URL.
 - 2026-11-27 (Task 04): Distant moves need two taps: the first previews and the second travels, the same on touch and mouse. Route following is a timed sequence of individually validated one-hex steps, and the pacing is presentation only. Terrain cost weights routes; each hex counts as one move until Task 06 decides turn costs.
+- 2026-11-27 (Task 06): Every player state change goes through one pipeline (validate → apply → clock → reactions → visibility → log → save). Moving costs one turn per hex regardless of terrain (the design's "move one hex = one turn"); terrain cost only shapes routes. The clock is a single turn counter with a derived four-part day of 12 turns per part. Reactions run before visibility so that anything they move is seen correctly the same turn. Log entries are structured data formatted by the UI.
+- 2026-11-27 (Task 07): Resource nodes are part of the generated world definition, placed per coordinate from hashes and terrain suitability. Gathering only ever records changes in a separate persistent layer (gathers taken per hex), so the baseline is reproducible and saves stay small. Nodes are gathered from their hex or any neighbour, so nodes on impassable terrain are usable from beside them; tapping a far one routes next to it, and "blocked" means no mapped approach exists. The UI offers one Gather button per valid option rather than a target-picking mode, which keeps it to one tap on touch. Nodes do not regrow (deferred).
 - 2026-11-27 (Task 05): Fog uses three per-hex states with a plain hex-distance sight radius of 4. Only known/unknown is persisted; visibility is derived from position. Route planning and tap feedback use only mapped hexes, so fog cannot be seen through via previews or error messages. Unknown hexes are not drawn at all. The map view is a dialog that reuses the main renderer, not an always-on minimap, to keep the phone screen clear.
 - 2026-11-27 (Task 01): Pointy-top hex orientation. All geometry lives in `src/world/hex.js`, and the screen transform lives in `src/render/gridView.js`. Hit-testing works in CSS pixels, so device pixel ratio never affects which hex is picked.

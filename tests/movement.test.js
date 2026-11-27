@@ -2,12 +2,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { hex, hexDistance } from '../src/world/hex.js';
 import { createPlayer } from '../src/entities/player.js';
-import { planRoute, tryStep } from '../src/systems/movement.js';
+import { planRoute, checkStep } from '../src/systems/movement.js';
 import { createTravel } from '../src/systems/travel.js';
+import { createTurnSystem } from '../src/core/game.js';
 import { decideTap } from '../src/ui/moveIntent.js';
 import * as text from '../src/ui/travelText.js';
 import { TERRAIN } from '../src/data/terrain.js';
-import { asciiWorld } from './helpers/asciiMap.js';
+import { asciiWorld, asciiGame } from './helpers/asciiMap.js';
 
 const MAP = [
   'S . . f . G',
@@ -33,44 +34,40 @@ function fakeClock() {
 }
 
 function setup() {
-  const { world, marks } = asciiWorld(MAP);
-  const player = createPlayer(marks.S);
+  const { game, world, marks } = asciiGame(MAP);
+  const { player } = game;
+  const turns = createTurnSystem();
   const clock = fakeClock();
   const events = [];
   const positions = [];
   const travel = createTravel({
-    step: (to) => { const r = tryStep(player, world, to); if (r.ok) positions.push(player.position); return r; },
+    step: (to) => { const r = turns.perform(game, { type: 'move', to }); if (r.ok) positions.push(player.position); return r; },
     onEvent: (e) => events.push(e),
     delay: 150,
     schedule: clock.schedule,
     cancel: clock.cancel,
   });
-  return { world, marks, player, clock, events, positions, travel };
+  return { game, world, marks, player, clock, events, positions, travel };
 }
 
-test('player starts at the given hex with no moves', () => {
+test('player starts at the given hex with empty packs', () => {
   const p = createPlayer(hex(3, -2));
-  assert.deepEqual(p, { position: { q: 3, r: -2 }, moves: 0 });
+  assert.deepEqual(p, { position: { q: 3, r: -2 }, inventory: { items: {} } });
 });
 
-test('tryStep: valid neighbour moves one hex and counts one move', () => {
+test('checkStep: a walkable neighbour is allowed and nothing changes', () => {
   const { world, player, marks } = setup();
-  assert.deepEqual(tryStep(player, world, hex(1, 0)), { ok: true });
-  assert.deepEqual(player.position, hex(1, 0));
-  assert.equal(player.moves, 1);
-  assert.notDeepEqual(player.position, marks.S);
+  assert.deepEqual(checkStep(player, world, hex(1, 0)), { ok: true });
+  assert.deepEqual(player.position, marks.S, 'checking does not move');
 });
 
-test('tryStep: invalid steps change nothing and cost nothing', () => {
+test('checkStep: invalid steps are refused with a reason', () => {
   const { world, player } = setup();
-  const before = structuredClone(player);
-  assert.deepEqual(tryStep(player, world, hex(2, 0)), { ok: false, reason: 'notAdjacent' }); // no teleport
-  assert.deepEqual(tryStep(player, world, hex(0, 0)), { ok: false, reason: 'notAdjacent' }); // own hex
-  assert.deepEqual(tryStep(player, world, hex(-1, 0)), { ok: false, reason: 'outside' });
+  assert.deepEqual(checkStep(player, world, hex(2, 0)), { ok: false, reason: 'notAdjacent' }); // no teleport
+  assert.deepEqual(checkStep(player, world, hex(0, 0)), { ok: false, reason: 'notAdjacent' }); // own hex
+  assert.deepEqual(checkStep(player, world, hex(-1, 0)), { ok: false, reason: 'outside' });
   player.position = hex(1, 0);
-  assert.deepEqual(tryStep(player, world, hex(1, 1)), { ok: false, reason: 'impassable' }); // mountain
-  assert.deepEqual(player.position, hex(1, 0));
-  assert.equal(player.moves, before.moves);
+  assert.deepEqual(checkStep(player, world, hex(1, 1)), { ok: false, reason: 'impassable' }); // mountain
 });
 
 test('planRoute statuses', () => {
@@ -90,7 +87,7 @@ test('planRoute statuses', () => {
 });
 
 test('travel: one hex per step, a pause between steps, arrives and leaves no timer', () => {
-  const { world, marks, player, clock, events, positions, travel } = setup();
+  const { game, world, marks, player, clock, events, positions, travel } = setup();
   const route = planRoute(world, marks.S, marks.G);
   travel.start(route.path);
   assert.equal(positions.length, 1, 'the first step is taken at once');
@@ -100,7 +97,7 @@ test('travel: one hex per step, a pause between steps, arrives and leaves no tim
   assert.equal(clock.pending(), 1);
   while (clock.tick()) { /* run each scheduled step */ }
   assert.deepEqual(player.position, marks.G);
-  assert.equal(player.moves, 5, 'one move per hex entered');
+  assert.equal(game.clock.turn, 5, 'one turn per hex entered');
   let prev = marks.S;
   for (const p of positions) { assert.equal(hexDistance(prev, p), 1, 'never teleports'); prev = p; }
   assert.deepEqual(events.map((e) => e.type), ['step', 'step', 'step', 'step', 'arrived']);
@@ -110,12 +107,12 @@ test('travel: one hex per step, a pause between steps, arrives and leaves no tim
 });
 
 test('travel: stop interrupts between steps; restart retargets', () => {
-  const { world, marks, player, clock, events, travel } = setup();
+  const { game, world, marks, player, clock, events, travel } = setup();
   travel.start(planRoute(world, marks.S, marks.G).path);
   clock.tick();
   assert.equal(travel.stop(), true);
   assert.equal(clock.pending(), 0);
-  assert.equal(player.moves, 2);
+  assert.equal(game.clock.turn, 2);
   assert.deepEqual(events.at(-1), { type: 'stopped', done: 2, total: 5, destination: marks.G });
   assert.equal(clock.tick(), false, 'no further steps after stopping');
   assert.equal(travel.stop(), false, 'stopping twice is harmless');
@@ -136,7 +133,7 @@ test('travel: stop interrupts between steps; restart retargets', () => {
 });
 
 test('travel: a route that becomes blocked stops safely at the last good hex', () => {
-  const { world, marks, player, clock, events, travel } = setup();
+  const { game, world, marks, player, clock, events, travel } = setup();
   const route = planRoute(world, marks.S, marks.G).path;
   travel.start(route);
   world.set(route[2], 'mountains'); // the third hex turns impassable mid-journey
@@ -147,7 +144,7 @@ test('travel: a route that becomes blocked stops safely at the last good hex', (
   assert.equal(clock.pending(), 0);
   const e = events.at(-1);
   assert.deepEqual([e.type, e.reason, e.done, e.at], ['blocked', 'impassable', 2, route[2]]);
-  assert.equal(player.moves, 2, 'the failed step cost nothing');
+  assert.equal(game.clock.turn, 2, 'the failed step cost no turn');
 });
 
 test('decideTap: idle taps', () => {
@@ -198,5 +195,6 @@ test('movement readout text', () => {
   assert.equal(text.describeBlocked(hex(1, 1), 1), 'Route blocked at q 1, r 1 · stopped after 1 step');
   assert.match(text.describeImpassable('Mountains · q 1, r 1'), /impassable/);
   assert.match(text.describeUnreachable('Grassland · q 9, r 0'), /no route/);
-  assert.equal(text.describePlayer({ position: hex(-1, 4), moves: 1 }), 'You · q −1, r 4 · 1 move');
+  assert.equal(text.describePlayer({ position: hex(-1, 4) }), 'You · q −1, r 4');
+  assert.equal(text.describeInterrupted(forest, 2, 5), 'Interrupted after 2 of 5 steps · tap Forest · q 3, r −2 again to continue');
 });

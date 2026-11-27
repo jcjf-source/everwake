@@ -1,9 +1,10 @@
 /**
- * End-to-end browser check of the current build (Tasks 01–05 behaviour):
+ * End-to-end browser check of the current build (Tasks 01–06 behaviour):
  * hex picking at several zoom levels and viewports, terrain readout, the
  * sanctuary, tap-to-move (step, route preview, stepwise travel, interrupt,
  * resume, retarget, unreachable feedback), fog of war (reveal boundary,
  * reveal on movement, dim memory, unexplored taps) and the Map dialog, the
+ * turn clock (one turn per step and per Wait, none for anything else), the
  * seed dialog, URL seed retention, Centre, Coords, console cleanliness, and
  * drag frame times.
  *
@@ -35,6 +36,12 @@ const { describeSelection } = await imp('src/ui/hud.js');
 const { decideTap } = await imp('src/ui/moveIntent.js');
 const { planRoute } = await imp('src/systems/movement.js');
 const T = await imp('src/ui/travelText.js');
+const K = await imp('src/ui/clockText.js');
+const G = await imp('src/ui/gatherText.js');
+const { nodeState, gatherOptions, planApproach } = await imp('src/systems/gathering.js');
+const { createWorldChanges } = await imp('src/world/worldChanges.js');
+const { createInventory, addItem } = await imp('src/systems/inventory.js');
+const { NODE_KINDS } = await imp('src/data/resources.js');
 const R = 40; // must match WORLD_RADIUS in src/main.js
 
 const s = await startSession();
@@ -68,39 +75,50 @@ async function load(url) {
 
 /** Node mirror of the page's map memory; reset on every page load. */
 let mem = null;
-const resetMemory = (world) => { mem = createMapMemory(R); mem.observe(world.sanctuary, SIGHT_RADIUS); };
+/** Node mirror of the page's world changes and inventory (gathering); reset with map memory. */
+let chg = null;
+let inv = null;
+const resetMemory = (world) => { mem = createMapMemory(R); mem.observe(world.sanctuary, SIGHT_RADIUS); chg = createWorldChanges(); inv = createInventory(); };
 /** The player stood on each of these hexes, in order. */
 const walked = (hexes) => { for (const h of hexes) mem.observe(h, SIGHT_RADIUS); };
 const knows = (h) => mem.isKnown(h);
 
 const terrainOf = (world, h) => { const t = world.tileAt(h); return t ? TERRAIN[t.terrain] : null; };
 const labelOf = (world, h) => T.placeLabel(h, terrainOf(world, h), world.sanctuary);
-const hereText = (world, pos) => `${describeSelection(pos, terrainOf(world, pos), world.sanctuary)} · you are here`;
+/** A mapped hex's node as the page knows it (gathering.js nodeState), or null. */
+const nodeOf = (world, h) => (h && knows(h) ? nodeState({ world, changes: chg }, h) : null);
+const liveNodeOf = (world) => (h) => { const n = nodeOf(world, h); return n && n.left > 0 ? n : null; };
+const noteOf = (world, h) => G.nodeNote(nodeOf(world, h));
+const hereText = (world, pos) => `${describeSelection(pos, terrainOf(world, pos), world.sanctuary)} · you are here${noteOf(world, pos)}`;
 
 /** The readout the page should show after an idle tap on `h` (mirrors main.js applyTapAction). */
 function expectTap(world, pos, h, preview = null) {
-  const { action } = decideTap(world, { position: pos, preview, travelling: null, knows }, h);
+  const { action } = decideTap(world, { position: pos, preview, travelling: null, knows, nodeAt: liveNodeOf(world) }, h);
   switch (action.kind) {
     case 'unexplored': return T.describeUnexplored(h);
     case 'clear': return T.MOVE_HINT;
     case 'here': return hereText(world, pos);
-    case 'step': return T.describeStepped(labelOf(world, h));
-    case 'preview': return T.describePreview(labelOf(world, h), action.preview.path.length, action.preview.cost);
-    case 'impassable': return T.describeImpassable(labelOf(world, h));
-    case 'unreachable': return T.describeUnreachable(labelOf(world, h));
+    case 'step': return T.describeStepped(labelOf(world, h)) + noteOf(world, h);
+    case 'preview': return T.describePreview(labelOf(world, h), action.preview.path.length, action.preview.cost) + noteOf(world, h);
+    case 'impassable': return T.describeImpassable(labelOf(world, h)) + noteOf(world, h);
+    case 'unreachable': return T.describeUnreachable(labelOf(world, h)) + noteOf(world, h);
+    case 'node': return G.describeInReach(labelOf(world, h), nodeOf(world, h));
+    case 'approach': return G.describeApproach(labelOf(world, h), nodeOf(world, h), action.preview.path.length, action.preview.cost);
+    case 'blocked': return G.describeNodeBlocked(labelOf(world, h), nodeOf(world, h));
     default: return `(${action.kind})`;
   }
 }
 
 const num = (x) => Number(x.replace('−', '-'));
-/** Player position and move count, read from the status line. */
+/** Player position (status line) and turn (clock). */
 async function playerState() {
-  const m = (await text('player-status')).match(/q (−?\d+), r (−?\d+) · (\d+) moves?/);
-  return m ? { pos: { q: num(m[1]), r: num(m[2]) }, moves: Number(m[3]) } : null;
+  const m = (await text('player-status')).match(/^You · q (−?\d+), r (−?\d+)$/);
+  const c = (await text('clock-status')).match(/ · turn (\d+)$/);
+  return m && c ? { pos: { q: num(m[1]), r: num(m[2]) }, turn: Number(c[1]) } : null;
 }
 
 async function hudBoxes() {
-  return ev(`[...document.querySelectorAll('button, #selection-readout, #player-status')].map(b => { const r = b.getBoundingClientRect(); return [r.left - 24, r.top - 24, r.right + 24, r.bottom + 24]; })`);
+  return ev(`[...document.querySelectorAll('button, #selection-readout, #player-status, #clock-status, #inventory-status, .hud-bottom')].map(b => { const r = b.getBoundingClientRect(); /* Gather buttons can appear above the readout later: reserve room for a row. */ const g = b.classList.contains('hud-bottom') ? { x: 160, y: 56 } : { x: 0, y: 0 }; return [r.left - 24 - g.x, r.top - 24 - g.y, r.right + 24 + g.x, r.bottom + 24]; })`);
 }
 
 const initialCamera = (world, w, h) =>
@@ -141,19 +159,21 @@ async function verifyPicking(label, world, cam, w, h, isTouch) {
     }
   }
   const st = await playerState();
-  check(st.moves === 0 || hexEquals(st.pos, pos), `${label}: picking taps never moved the player`);
+  check(st.turn === 0 || hexEquals(st.pos, pos), `${label}: picking taps never moved the player`);
   console.log(`  ${label}: picking ${ok}/${total} (hex ${view.size.toFixed(1)}px; outcomes: ${[...kinds].join(', ')})`);
 }
 
 /** Poll while the readout says "Travelling"; returns every distinct position seen. */
 async function watchTravel(start, timeoutMs = 20000) {
   const seen = [start];
+  let waitDisabledSeen = false;
   const end = Date.now() + timeoutMs;
   for (;;) {
     const r = await readout(); // read first: a step can land between the two reads
     const st = await playerState();
     if (!hexEquals(seen[seen.length - 1], st.pos)) seen.push(st.pos);
-    if (!r.startsWith('Travelling') || Date.now() > end) return { seen, readout: r, moves: st.moves };
+    if (r.startsWith('Travelling') && (await ev("document.getElementById('wait-button').disabled"))) waitDisabledSeen = true;
+    if (!r.startsWith('Travelling') || Date.now() > end) return { seen, readout: r, turn: st.turn, waitDisabledSeen };
     await frame();
   }
 }
@@ -197,7 +217,8 @@ async function verifyMovement(world, w, h, isTouch) {
   };
 
   let st = await playerState();
-  check(st && hexEquals(st.pos, world.sanctuary) && st.moves === 0, `player starts on the sanctuary with 0 moves: ${await text('player-status')}`);
+  check(st && hexEquals(st.pos, world.sanctuary) && st.turn === 0, `player starts on the sanctuary at turn 0: ${await text('player-status')}`);
+  check((await text('clock-status')) === K.describeClock(0), `clock starts at day 1, morning: "${await text('clock-status')}"`);
   check((await readout()) === T.MOVE_HINT, 'movement hint shown');
 
   // One-tap step to a neighbour, and back.
@@ -205,25 +226,38 @@ async function verifyMovement(world, w, h, isTouch) {
   await tapHex(nb);
   walked([nb]);
   st = await playerState();
-  check(hexEquals(st.pos, nb) && st.moves === 1 && (await readout()) === T.describeStepped(labelOf(world, nb)), `adjacent tap steps one hex: "${await readout()}"`);
+  check(hexEquals(st.pos, nb) && st.turn === 1 && (await readout()) === T.describeStepped(labelOf(world, nb)) + noteOf(world, nb), `adjacent tap steps one hex: "${await readout()}"`);
   await tapHex(world.sanctuary);
   walked([world.sanctuary]);
   st = await playerState();
-  check(hexEquals(st.pos, world.sanctuary) && st.moves === 2, 'stepping back works');
+  check(hexEquals(st.pos, world.sanctuary) && st.turn === 2, 'stepping back works: one turn per step');
+  check((await text('clock-status')) === K.describeClock(2), 'clock shows the turn');
+
+  // Wait: one turn passes where you stand; idle time never advances.
+  await clickEl('#wait-button');
+  st = await playerState();
+  check(hexEquals(st.pos, world.sanctuary) && st.turn === 3 && (await readout()) === K.WAITED, `Wait costs one turn and stays put: "${await readout()}"`);
+  await s.wait(500);
+  check((await playerState()).turn === 3, 'idle: no turn passes while waiting for input');
+  await tapHex(world.sanctuary); // inspecting your own hex is not an action
+  check((await playerState()).turn === 3, 'inspecting costs no turn');
+  const base = 3;
 
   // Preview then travel a route, one hex at a time.
   let target = pickTarget(st.pos);
   if (!target) { fail('no route target on screen'); return; }
   await tapHex(target.hex);
   check((await readout()) === T.describePreview(labelOf(world, target.hex), target.path.length, target.cost), `first tap previews: "${await readout()}"`);
-  check((await playerState()).moves === 2, 'preview costs no move');
+  check((await playerState()).turn === base, 'preview costs no turn');
   await shot(`${tag}-route-preview`);
   await tapHex(target.hex);
   let run = await watchTravel(st.pos);
   walked(target.path);
   check(samePath(run.seen, [st.pos, ...target.path]), `travel walks the planned path hex by hex (${run.seen.length - 1} of ${target.path.length} positions observed)`);
   check(contiguous(run.seen), 'every observed move is to a neighbour (no teleport)');
-  check(run.readout === T.describeArrived(labelOf(world, target.hex), target.path.length) && run.moves === 2 + target.path.length, `arrives: "${run.readout}", ${run.moves} moves`);
+  check(run.readout === T.describeArrived(labelOf(world, target.hex), target.path.length) + noteOf(world, target.hex) && run.turn === base + target.path.length, `arrives: "${run.readout}", turn ${run.turn} (one per hex)`);
+  check(run.waitDisabledSeen, 'Wait is disabled while travelling');
+  check(!(await ev(`document.getElementById('wait-button').disabled`)), 'Wait is enabled again on arrival');
 
   // Interrupt, confirm it stays stopped, then resume.
   await recentre();
@@ -231,14 +265,14 @@ async function verifyMovement(world, w, h, isTouch) {
   target = pickTarget(st.pos);
   await tapHex(target.hex);
   await tapHex(target.hex);
-  for (let i = 0; i < 100 && (await playerState()).moves < st.moves + 2; i++) await frame();
+  for (let i = 0; i < 100 && (await playerState()).turn < st.turn + 2; i++) await frame();
   await tapHex(target.hex); // tapping the destination while travelling stops
   const stopped = await playerState();
   await s.wait(600);
   const later = await playerState();
   const stopText = await readout();
   walked(target.path.slice(0, target.path.findIndex((hh) => hexEquals(hh, later.pos)) + 1));
-  check(stopText.startsWith('Stopped after') && hexEquals(stopped.pos, later.pos) && stopped.moves === later.moves && !hexEquals(later.pos, target.hex),
+  check(stopText.startsWith('Stopped after') && hexEquals(stopped.pos, later.pos) && stopped.turn === later.turn && !hexEquals(later.pos, target.hex),
     `tap stops travel and nothing moves while idle: "${stopText}"`);
   await shot(`${tag}-stopped`);
   await recentre();
@@ -255,7 +289,7 @@ async function verifyMovement(world, w, h, isTouch) {
   if (!b) { fail('no second target for retargeting'); return; }
   await tapHex(a.hex);
   await tapHex(a.hex);
-  for (let i = 0; i < 100 && (await playerState()).moves < st.moves + 1; i++) await frame();
+  for (let i = 0; i < 100 && (await playerState()).turn < st.turn + 1; i++) await frame();
   await tapHex(b.hex);
   const mid = await playerState();
   walked(a.path.slice(0, a.path.findIndex((hh) => hexEquals(hh, mid.pos)) + 1));
@@ -282,7 +316,7 @@ async function verifyMovement(world, w, h, isTouch) {
     const e0 = await playerState();
     walked(t2.path.slice(0, t2.path.findIndex((hh) => hexEquals(hh, e0.pos)) + 1));
     await s.wait(400);
-    check((await readout()).startsWith('Stopped after') && (await playerState()).moves === e0.moves, 'Escape stops travel');
+    check((await readout()).startsWith('Stopped after') && (await playerState()).turn === e0.turn, 'Escape stops travel');
     await esc();
     check((await readout()) === T.MOVE_HINT, 'Escape again clears the route');
   }
@@ -293,7 +327,7 @@ async function verifyMovement(world, w, h, isTouch) {
   const feedback = async (wld, kinds) => {
     const reach = reachableKeys(wld, (await playerState()).pos);
     const isKind = {
-      impassable: (hh) => !wld.isWalkable(hh),
+      impassable: (hh) => !wld.isWalkable(hh) && !wld.resourceAt(hh), // a node there makes it a gather target
       unreachable: (hh) => wld.isWalkable(hh) && !reach.has(hexKey(hh)),
     };
     // Fog: only a mapped hex can be explained. Walk toward the nearest hex
@@ -344,7 +378,7 @@ async function verifyMovement(world, w, h, isTouch) {
       }
       await tapHex(hh);
       const got = await readout();
-      check(got === expectTap(wld, st.pos, hh) && (await playerState()).moves === st.moves, `${what} target explained, no move: "${got}"`);
+      check(got === expectTap(wld, st.pos, hh) && (await playerState()).turn === st.turn, `${what} target explained, no move: "${got}"`);
       await shot(`${tag}-${what}`);
       // Zoom back in so later exploring legs tap at a comfortable size.
       for (let i = 0; i < outs; i++) {
@@ -359,6 +393,105 @@ async function verifyMovement(world, w, h, isTouch) {
   await load(`${s.appUrl}?seed=island-133`);
   cam = initialCamera(isle, w, h);
   await feedback(isle, ['unreachable']);
+}
+
+/**
+ * Gathering: walk to a node, gather it with the contextual button until it
+ * is spent (one turn each, inventory and readout checked), see that it stays
+ * spent after leaving and coming back, and walk next to an impassable node
+ * by tapping it (approach route), if one is mapped near the start.
+ */
+async function verifyGathering(world, w, h, isTouch) {
+  await load(`${s.appUrl}?seed=everwake`);
+  let cam = initialCamera(world, w, h);
+  const hud = await hudBoxes();
+  const view = () => C.cameraToView(cam, w, h);
+  const screenOf = (hh) => hexToScreen(view(), hh);
+  const tappable = (hh) => { const p = screenOf(hh); return p.x > w * 0.12 && p.x < w * 0.88 && p.y > h * 0.12 && p.y < h * 0.88 && !hud.some(([l, t, r, b]) => p.x >= l && p.x <= r && p.y >= t && p.y <= b); };
+  const tapHex = async (hh) => { const p = screenOf(hh); await tap(p.x, p.y, isTouch); };
+  const recentre = async () => { await clickEl('#recenter'); cam = C.centerOnHex(cam, (await playerState()).pos); };
+  const mirror = (pos) => ({ world, changes: chg, memory: mem, player: { position: pos } });
+  const buttons = () => ev(`[...document.querySelectorAll('#gather-actions button')].map(b => ({ text: b.textContent, label: b.getAttribute('aria-label'), index: b.dataset.index }))`);
+  const wantButtons = (pos) => gatherOptions(mirror(pos)).map((o) => { const b = G.gatherButton(o); return { text: `${b.text} ${b.where}`, label: b.label }; });
+
+  check((await text('inventory-status')) === G.describeInventory(inv), `inventory starts empty: "${await text('inventory-status')}"`);
+
+  // Nearest mapped walkable node with a route, on screen.
+  let st = await playerState();
+  const node = world.resourceNodes
+    .filter((n) => knows(n) && world.isWalkable(n) && tappable(n) && hexDistance(n, st.pos) >= 2)
+    .sort((a, b) => hexDistance(a, st.pos) - hexDistance(b, st.pos))
+    .map((n) => ({ n, r: planRoute(world, st.pos, n, { knows }) }))
+    .find((x) => x.r.status === 'ok');
+  if (!node) { fail('no walkable resource node near the start'); return; }
+  const at = { q: node.n.q, r: node.n.r };
+  await tapHex(at);
+  check((await readout()) === expectTap(world, st.pos, at), `tapping a node previews a route and names it: "${await readout()}"`);
+  await tapHex(at);
+  const run = await watchTravel(st.pos);
+  walked(node.r.path);
+  st = await playerState();
+  check(hexEquals(st.pos, at) && run.readout === T.describeArrived(labelOf(world, at), node.r.path.length) + noteOf(world, at), `arrive on the node: "${run.readout}"`);
+  const got = await buttons();
+  check(JSON.stringify(got.map(({ text, label }) => ({ text, label }))) === JSON.stringify(wantButtons(st.pos)), `Gather buttons for nodes in reach: ${got.map((b) => b.text).join(', ')}`);
+  await shot(`gather-${w}x${h}`);
+
+  // Gather until spent: one turn each.
+  const def = NODE_KINDS[node.n.kind];
+  let turn = st.turn;
+  for (let left = nodeOf(world, at).left; left > 0; left--) {
+    const btn = (await buttons()).find((b) => b.label === G.gatherButton({ ...nodeOf(world, at), direction: null }).label);
+    if (!btn) { fail('no Gather button for the node underfoot'); return; }
+    await clickEl(`#gather-actions button[data-index="${btn.index}"]`);
+    chg.recordGather(at, 1);
+    addItem(inv, node.n.resource, def.yield);
+    const want = K.describeEvents([{ type: 'gathered', at, kind: node.n.kind, resource: node.n.resource, amount: def.yield, left: left - 1, total: 0 }]);
+    const now = await playerState();
+    check(now.turn === turn + 1 && hexEquals(now.pos, at) && (await readout()).startsWith(want), `gather costs one turn: "${await readout()}" (turn ${now.turn})`);
+    check((await text('inventory-status')) === G.describeInventory(inv), `inventory updated: "${await text('inventory-status')}"`);
+    turn = now.turn;
+  }
+  check(JSON.stringify((await buttons()).map(({ text, label }) => ({ text, label }))) === JSON.stringify(wantButtons(at)) && !gatherOptions(mirror(at)).some((o) => hexEquals(o.at, at)), 'a spent node offers no Gather button');
+  await tapHex(at);
+  check((await readout()) === hereText(world, at) && (await readout()).endsWith('picked clean') && (await playerState()).turn === turn, `inspecting the spent node: "${await readout()}", no turn`);
+  await s.wait(400);
+  check((await playerState()).turn === turn, 'idle: nothing regrows or advances');
+
+  // Leave and come back: still spent.
+  const away = hexNeighbors(at).find((n) => world.isWalkable(n) && tappable(n));
+  await tapHex(away);
+  walked([away]);
+  await tapHex(at);
+  walked([at]);
+  check((await readout()) === T.describeStepped(labelOf(world, at)) + noteOf(world, at) && nodeOf(world, at).left === 0, `back on the node, it is still spent: "${await readout()}"`);
+  check(JSON.stringify((await buttons()).map(({ text, label }) => ({ text, label }))) === JSON.stringify(wantButtons(at)), 'Gather buttons match what is in reach after the revisit');
+
+  // An impassable node (mountain stone, deep-water fish): tap to walk next to
+  // it. Such nodes are rare in sight of a start; shore-42 (found by searching
+  // seeds) has mountain stone a few hexes from its sanctuary.
+  const aw = createWorld('shore-42', R);
+  await load(`${s.appUrl}?seed=shore-42`);
+  cam = initialCamera(aw, w, h);
+  st = await playerState();
+  const far = aw.resourceNodes
+    .filter((n) => knows(n) && !aw.isWalkable(n) && tappable(n) && hexDistance(n, st.pos) >= 2)
+    .sort((x, y) => hexDistance(x, st.pos) - hexDistance(y, st.pos))
+    .map((n) => ({ n, a: planApproach(aw, st.pos, n, { knows }) }))
+    .find((x) => x.a && x.a.path.length > 0);
+  if (!far) { fail('shore-42: no mapped impassable node to approach'); return; }
+  const fat = { q: far.n.q, r: far.n.r };
+  await tapHex(fat);
+  check((await readout()) === expectTap(aw, st.pos, fat) && (await readout()).startsWith('Route next to'), `tapping a far impassable node previews a route next to it: "${await readout()}"`);
+  await tapHex(fat);
+  const run2 = await watchTravel(st.pos);
+  walked(far.a.path);
+  const end = await playerState();
+  check(hexEquals(end.pos, far.a.destination) && run2.readout === T.describeArrived(labelOf(aw, far.a.destination), far.a.path.length) + noteOf(aw, fat), `walks next to it: "${run2.readout}"`);
+  const opt = gatherOptions({ world: aw, changes: chg, memory: mem, player: { position: end.pos } }).find((o) => hexEquals(o.at, fat));
+  check(!!opt && (await buttons()).some((x) => x.label === G.gatherButton(opt).label), `and can gather it from there (${opt ? G.gatherButton(opt).label : 'not in reach'})`);
+  await tapHex(fat);
+  check((await readout()) === G.describeInReach(labelOf(aw, fat), nodeOf(aw, fat)) && (await playerState()).turn === end.turn, `tapping it now says it is in reach, no turn: "${await readout()}"`);
+  await shot(`gather-approach-${w}x${h}`);
 }
 
 /** Mean colour `{ r, g, b, v }` (v = brightness) of a small box of world-canvas pixels around a CSS point. */
@@ -417,7 +550,7 @@ async function verifyFog(world, w, h, isTouch) {
   }
   check(edge.length > 0 && beyond.length > 0 && edgeOk === edge.length && beyondOk === beyond.length,
     `start reveals radius ${SIGHT_RADIUS}: ring ${SIGHT_RADIUS} mapped (${edgeOk}/${edge.length}), ring ${SIGHT_RADIUS + 1} unexplored (${beyondOk}/${beyond.length})`);
-  check((await playerState()).moves === 0, 'boundary taps never moved the player');
+  check((await playerState()).turn === 0, 'boundary taps never moved the player');
 
   // Step toward a hex just beyond sight: it is revealed. Step back: it is remembered (dim).
   const dirs = hexNeighbors(start).filter((n) => world.isWalkable(n));
@@ -453,6 +586,7 @@ async function verifyFog(world, w, h, isTouch) {
   await shot(`fog-${w}x${h}`);
 
   // Map dialog.
+  const turn0 = (await playerState()).turn;
   await clickEl('#map-button');
   check(await ev(`document.getElementById('map-dialog').open`), 'Map opens the map dialog');
   const wantSummary = `${T.describeExplored(mem.knownCount, mem.totalCount)} · you are at ${coordText(start)}`;
@@ -473,12 +607,12 @@ async function verifyFog(world, w, h, isTouch) {
   const pc = hexToScreen(mview, pick);
   await tap(box.x + pc.x, box.y + pc.y, isTouch);
   const pickedText = await readout();
-  check(!(await ev(`document.getElementById('map-dialog').open`)) && pickedText === describeSelection(pick, terrainOf(world, pick), world.sanctuary),
+  check(!(await ev(`document.getElementById('map-dialog').open`)) && pickedText === describeSelection(pick, terrainOf(world, pick), world.sanctuary) + noteOf(world, pick),
     `tapping a mapped hex closes the map and looks there: "${pickedText}"`);
   cam = C.centerOnHex(cam, pick);
   await tap(w / 2, h / 2, isTouch);
   check((await readout()) === expectTap(world, start, pick), 'the view is centred on the picked hex');
-  check((await playerState()).moves === 2, 'map use costs no moves');
+  check((await playerState()).turn === turn0, 'map use costs no turn');
 }
 
 async function perf(label, w, h, isTouch) {
@@ -497,8 +631,8 @@ try {
     let cam = initialCamera(world, w, h);
 
     check((await text('seed-text')) === 'everwake', 'seed button shows the seed from the URL');
-    const layout = await ev(`(() => { const r = (q) => document.querySelector(q).getBoundingClientRect(); const t = r('.hud-title'), sb = r('#seed-button'), c = r('#coords-toggle'), m = r('#map-button'), st = r('#player-status'); return { overlap: t.right > sb.left, right: c.right, mapBottom: m.bottom, statusClear: m.top > st.bottom || m.left > st.right, sw: document.scrollingElement.scrollWidth }; })()`);
-    check(!layout.overlap && layout.right <= w && layout.sw <= w && layout.mapBottom <= h && layout.statusClear, `top bar and view controls fit ${JSON.stringify(layout)}`);
+    const layout = await ev(`(() => { const r = (q) => document.querySelector(q).getBoundingClientRect(); const t = r('.hud-title'), sb = r('#seed-button'), c = r('#coords-toggle'), m = r('#map-button'), z = r('#zoom-in'), st = r('.hud-info'), wb = r('#wait-button'); return { overlap: t.right > sb.left, right: c.right, mapBottom: m.bottom, statusClear: (z.top > st.bottom || z.left > st.right) && st.top >= t.bottom, waitIn: wb.right <= innerWidth && wb.height >= 44, sw: document.scrollingElement.scrollWidth }; })()`);
+    check(!layout.overlap && layout.right <= w && layout.sw <= w && layout.mapBottom <= h && layout.statusClear && layout.waitIn, `top bar and view controls fit ${JSON.stringify(layout)}`);
 
     await tap(w / 2, h / 2, mobile);
     check((await readout()).startsWith('Sanctuary (grassland)'), `opens centred on the sanctuary: "${await readout()}"`);
@@ -525,6 +659,9 @@ try {
 
     console.log('  -- movement');
     await verifyMovement(world, w, h, mobile);
+
+    console.log('  -- gathering');
+    await verifyGathering(world, w, h, mobile);
 
     // Dialog and seed flows on one desktop and one phone viewport.
     if (cfg.name.startsWith('desktop-1280') || cfg.name.startsWith('phone-390')) {
@@ -567,7 +704,8 @@ try {
       resetMemory(world);
       cam = C.centerOnHex(cam, world.sanctuary);
       check((await readout()) === T.MOVE_HINT, 'selection cleared on new world');
-      check((await text('player-status')) === T.describePlayer({ position: world.sanctuary, moves: 0 }), 'player reset to the new sanctuary');
+      check((await text('player-status')) === T.describePlayer({ position: world.sanctuary }), 'player reset to the new sanctuary');
+      check((await text('clock-status')) === K.describeClock(0), 'clock reset for the new world');
       await tap(w / 2, h / 2, mobile);
       check((await readout()).startsWith('Sanctuary'), 'new world centred on its sanctuary');
       await tap(w / 2, h / 2, mobile);

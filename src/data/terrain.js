@@ -2,9 +2,9 @@
  * Terrain definitions: gameplay properties only (colours and art live in
  * src/render/terrainStyle.js).
  *
- * - walkable / moveCost: cost to enter the tile (route weight; whether it
- *   also costs extra turns is decided in Task 06). Unwalkable tiles have
- *   moveCost Infinity (pathfinding excludes them).
+ * - walkable / moveCost: cost to enter the tile as a route weight only;
+ *   every hex entered takes one turn whatever its terrain (Task 06).
+ *   Unwalkable tiles have moveCost Infinity (pathfinding excludes them).
  * - sightModifier: change to an observer's sight radius when standing here
  *   (hills and peaks see further; woods see less).
  * - blocksSight: whether the tile stops line of sight beyond it.

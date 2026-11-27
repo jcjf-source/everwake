@@ -5,6 +5,31 @@ This file records notable project changes. It begins as a documentation scaffold
 
 ## Unreleased
 
+### Task 07: Resource nodes and gathering
+- The wilderness now holds resource nodes of four resources: **deadfall** (wood), **loose stone** (stone), **herb patches** (herbs), and **berry bushes** or **fish shoals** (food; fish only in water). Where they appear follows each terrain's resource suitability: wood in forests, stone on rocky ground and mountains, and so on. About one hex in ten holds a node, never the sanctuary. Placement is generated from the seed and each hex's coordinates (`src/world/resourceNodes.js`), so the same world always has the same nodes.
+- Nodes are drawn as small marks in the lower right of their hex (crossed logs, stones, sprigs, berries, a fish) once the hex is mapped. They appear as coloured dots when zoomed out, and as a faint dashed ring once spent. Nodes you can gather right now get a gold ring.
+- **Gather** buttons appear above the readout, one for each node in reach: on your hex ("here") or a neighbouring hex (with an arrow showing its direction). Each gather is a `gather` action costing one turn: it adds the node's yield (2 wood or stone, 1 herb or food) to your packs and uses up one of its 2–4 gathers. The readout says what you got and what is left ("Gathered 2 wood from deadfall · 1 gather left").
+- A new inventory line under the clock shows what you carry ("Wood 2 · Stone 0 · Herbs 1 · Food 0").
+- Depletion is a persistent world change (`src/world/worldChanges.js`), separate from the generated world, so a spent node stays spent when you leave and come back. Nodes do not regrow yet. A versioned save form is ready for Task 13.
+- Nodes on hexes you cannot enter (stone on a mountain, fish in deep water) are gathered from next to them:
+  - tapping one next to you says it is in reach;
+  - tapping a far one previews a route to the nearest hex beside it ("Route next to …"), and a second tap walks there;
+  - if there is no mapped way to reach it, the readout says it is blocked.
+- Readouts about a mapped hex with a node name it and what is left ("· Deadfall (wood) · 2 gathers left", or "picked clean"): inspecting, stepping, route previews, arrival, and picks from the Map dialog. The Map legend gained a resource key.
+- Invalid gathers (too far, spent, nothing there, unmapped, off the map) are refused by the turn pipeline and cost no turn. The UI only offers gathers that are valid.
+- An action's own events now come first in its turn's events (the gather, then any day-part change), and the log records gathers.
+- Tests: node placement (deterministic, terrain-appropriate, independent of order and map size, golden fingerprint), gather turn cost, inventory and log, depletion and refusals at no cost, gathering from a neighbouring or impassable hex, staying spent after a revisit, event order, world-changes save round trip and malformed saves, tap intent on nodes (in reach / approach / blocked / spent / fog), and text (156 tests total). The browser check now walks to a node, gathers it until spent (turn, inventory and readout each time), revisits it, and walks next to a mountain node on seed `shore-42`, on four viewports. Readouts it mirrors include node notes.
+
+### Task 06: Action turns and world clock
+- Every player action now goes through one turn pipeline (`src/core/game.js`): validate → apply → advance the clock → enemy/environment reactions → update fog of war → log → save hook. Invalid actions change nothing and cost no turn; nothing happens while you are idle.
+- Actions (`src/core/actions.js`): **move** (one adjacent walkable hex) and **wait**, one turn each. Moving costs one turn per hex whatever the terrain; terrain cost still decides which route is planned. Each step of a route is its own move action and turn.
+- New world clock (`src/core/clock.js`): turn count with four day parts (morning, afternoon, evening, night) of 12 turns each; the game starts on day 1, morning. A versioned save form is ready for Task 13.
+- The status area now shows your position and, below it, a clock chip ("Morning · day 1 · turn 0") with a day-part mark (sun, low sun, dusk, crescent). When a day part changes, the readout says so ("Evening draws in", "Day 2 dawns"). Day parts have no gameplay effect yet.
+- New **Wait** button next to the clock: one turn passes where you stand. It is disabled while travelling.
+- Reactions can interrupt travel after a step (for encounters, Task 09); travel then stops with "Interrupted after …", and one tap on the destination resumes.
+- The player's move counter is gone: the clock's turn count replaces it.
+- Tests: action costs (move and wait cost exactly one turn), invalid actions cost nothing and run no later stage, pipeline order, interrupts, day-part boundaries and events, the log cap, one turn per hex on routes (not terrain cost), blocked steps, idle time, clock save round trip and clock text (142 tests total). The browser check reads the turn from the clock and covers Wait, idle time, free inspection and previews, one turn per route hex, Wait disabled during travel, the clock reset on a new world, and the status-area layout, on four viewports.
+
 ### Task 05: Fog of war and map memory
 - The world starts hidden. Only hexes within 4 steps of you (hex distance) are revealed at the start, and each step reveals the hexes that come into sight.
 - Every hex is unknown, remembered or visible. Unknown hexes are not drawn at all, so neither their terrain nor anything on them shows. Hexes you have seen but are no longer in sight stay mapped under a dim veil, and hexes in sight are drawn in full.

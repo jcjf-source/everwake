@@ -20,8 +20,8 @@ Task files are executed one at a time. Mark a task complete only after its accep
 **Exit criteria:** explore a repeatable map and reveal/remember terrain.
 
 ## Milestone 3 — Turn-based game loop
-- [ ] Task 06: Action/turn clock
-- [ ] Task 07: Resource nodes and contextual interactions
+- [x] Task 06: Action/turn clock (2026-11-27)
+- [x] Task 07: Resource nodes and contextual interactions (2026-11-27)
 - [ ] Task 08: Points of interest and discoveries
 **Exit criteria:** actions consume turns and exploration provides tangible rewards.
 

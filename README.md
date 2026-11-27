@@ -2,7 +2,7 @@
 
 A turn-based, hex-grid exploration roguelite for the browser. You set out from a sanctuary into a persistent, seeded world, map it, take risks, and return (or die) wiser.
 
-**Status:** early prototype. The current build generates a seeded terrain map (water, rivers, forests, hills, mountains, and more) with a sanctuary near the centre. Pan by dragging and zoom with the mouse wheel, pinch, or the + / − buttons. You start at the sanctuary. Tap a neighbouring hex to step onto it; tap a farther hex to preview a route (the readout gives its length and terrain cost), then tap it again to travel there one hex at a time. Tap during travel to stop (tap the destination again to resume), or tap another hex to retarget; **Escape** also stops or clears a route. Impassable and cut-off hexes are explained instead. The centre button recentres on you. The **Seed** button shows the world seed and creates a new world from a typed or random seed. The seed is kept in the URL (`?seed=…`), so reloading or sharing the link reopens the same world. Turns, fog of war and everything else are still to come. See [docs/ROADMAP.md](docs/ROADMAP.md) for progress.
+**Status:** early prototype. The current build generates a seeded terrain map (water, rivers, forests, hills, mountains, and more) with a sanctuary near the centre. Pan by dragging and zoom with the mouse wheel, pinch, or the + / − buttons. You start at the sanctuary. Tap a neighbouring hex to step onto it; tap a farther hex to preview a route (the readout gives its length and terrain cost), then tap it again to travel there one hex at a time. Tap during travel to stop (tap the destination again to resume), or tap another hex to retarget; **Escape** also stops or clears a route. Impassable and cut-off hexes are explained instead. The centre button recentres on you. The **Seed** button shows the world seed and creates a new world from a typed or random seed. The seed is kept in the URL (`?seed=…`), so reloading or sharing the link reopens the same world. Every step, and the **Wait** button, takes one turn. Resource nodes (wood, stone, herbs, food) dot the land: when one is on your hex or next to it, a **Gather** button appears above the readout, and each gather takes one turn and adds to the packs shown under the clock. Nodes run out and stay spent. Tap a node on a mountain or in deep water to walk next to it. The clock under your position shows the turn and the time of day (morning, afternoon, evening, night, 12 turns each), and nothing happens while you are idle. Looking around, planning routes and opening the map are free. See [docs/ROADMAP.md](docs/ROADMAP.md) for progress.
 
 ## Tech
 
@@ -68,12 +68,12 @@ favicon.svg
 css/main.css          Layout, palette, and responsive styles
 src/main.js           Bootstrap: installs error reporting, then loads modules
 src/core/             Core services (error panel, seeded PRNG, cosmetic hashes)
-src/entities/         Player state
-src/systems/          Movement rules and stepwise travel
-src/data/             Terrain definitions (gameplay properties)
-src/world/            Hex geometry, A* pathfinding, seeds, noise, terrain generation, world + sanctuary, fog of war / map memory
-src/render/           Canvas sizing, camera, view transform, terrain, player and route drawing
-src/ui/               Pointer input, tap intent, HUD (readout, status, zoom, Coords), seed dialog, Map dialog
+src/entities/         Player state (position, inventory)
+src/systems/          Movement rules, stepwise travel, gathering, inventory
+src/data/             Terrain and resource definitions (gameplay properties)
+src/world/            Hex geometry, A* pathfinding, seeds, noise, terrain generation, world + sanctuary, resource nodes, world changes, fog of war / map memory
+src/render/           Canvas sizing, camera, view transform, terrain, resource node, player and route drawing
+src/ui/               Pointer input, tap intent, HUD (readout, status, inventory, Gather, zoom, Coords), seed dialog, Map dialog
 tests/                Unit tests (node --test)
 tools/serve.mjs       Zero-dependency local dev server
 tools/browser/        Headless-Chrome checks and frame-time benchmark (CDP)

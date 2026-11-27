@@ -1,11 +1,12 @@
 /**
  * Stepwise route following.
  *
- * Walks a planned path one hex at a time by calling `step(hex)` (normally
- * movement.tryStep) for each hex, with a short delay between steps so the
+ * Walks a planned path one hex at a time by calling `step(hex)` (normally a
+ * move action through the turn pipeline, so one turn per hex) for each hex, with a short delay between steps so the
  * journey is visible. Every step is re-validated, so a route that has
  * become blocked stops safely at the last good hex. Travel can be stopped
- * at any time; nothing happens between steps unless a route is active, and
+ * at any time, and a step may ask to interrupt it (`interrupt` in the step
+ * result: an encounter, say), which stops travel after that step; nothing happens between steps unless a route is active, and
  * no timer is left running once travel ends.
  *
  * The timer is injectable so tests can drive travel deterministically.
@@ -18,10 +19,11 @@ export const STEP_DELAY_MS = 150;
  * @typedef {{ q: number, r: number }} Hex
  * @typedef {{ type: 'step' | 'arrived', at: Hex, done: number, total: number, destination: Hex }
  *   | { type: 'stopped', done: number, total: number, destination: Hex }
- *   | { type: 'blocked', at: Hex, reason: string, done: number, total: number, destination: Hex }} TravelEvent
+ *   | { type: 'blocked', at: Hex, reason: string, done: number, total: number, destination: Hex }
+ *   | { type: 'interrupted', at: Hex, reason: string, done: number, total: number, destination: Hex }} TravelEvent
  *
  * @param {{
- *   step: (to: Hex) => { ok: boolean, reason?: string },
+ *   step: (to: Hex) => { ok: boolean, reason?: string, interrupt?: { reason: string } | null },
  *   onEvent: (e: TravelEvent) => void,
  *   delay?: number,
  *   schedule?: (fn: () => void, ms: number) => unknown,
@@ -56,6 +58,11 @@ export function createTravel({ step, onEvent, delay = STEP_DELAY_MS, schedule = 
     if (done >= path.length) {
       finish();
       onEvent({ type: 'arrived', at: to, done, total: path.length, destination });
+      return;
+    }
+    if (result.interrupt) {
+      finish();
+      onEvent({ type: 'interrupted', at: to, reason: result.interrupt.reason ?? 'interrupted', done, total: path.length, destination });
       return;
     }
     onEvent({ type: 'step', at: to, done, total: path.length, destination });
