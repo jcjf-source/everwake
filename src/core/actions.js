@@ -28,6 +28,7 @@ import {
 import {
   checkUse, useItem, checkEquip, equipItem, checkUnequip, unequipSlot,
 } from '../systems/items.js';
+import { checkReturn, returnHome } from '../systems/expedition.js';
 
 /** @typedef {{ q: number, r: number }} Hex */
 
@@ -135,6 +136,17 @@ export const ACTIONS = Object.freeze({
     validate: (game, action) => checkUnequip(game, action.slot),
     apply: (game, action) => ({ events: unequipSlot(game, action.slot) }),
   }),
+  /**
+   * End the expedition by returning (Task 12): `{ type: 'return' }`, on
+   * sanctuary ground once the expedition has taken a turn. The pack is kept
+   * for the next expedition; the pipeline finishes the expedition and files
+   * its report (systems/expedition.js).
+   */
+  return: Object.freeze({
+    cost: 1,
+    validate: (game) => checkReturn(game),
+    apply: (game) => ({ events: returnHome(game) }),
+  }),
   /** Stay put and let a turn pass: `{ type: 'wait' }`. */
   wait: Object.freeze({
     cost: 1,
@@ -151,6 +163,9 @@ export function validateAction(game, action) {
   if (!action || typeof action !== 'object') return { ok: false, reason: 'badAction' };
   const def = Object.hasOwn(ACTIONS, action.type) ? ACTIONS[action.type] : null;
   if (!def) return { ok: false, reason: 'unknownAction' };
+  // Between expeditions (after a return or a defeat) nothing happens in the
+  // world until the player sets out again (core/game.js setOut).
+  if (game.expedition && game.expedition.status !== 'active') return { ok: false, reason: 'noExpedition' };
   const v = def.validate(game, action);
   return v.ok ? { ok: true, def } : { ok: false, reason: v.reason };
 }

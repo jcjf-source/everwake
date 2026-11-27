@@ -20,19 +20,28 @@
  *                 discovery interrupts travel, like an encounter.
  *   6. log        append this turn's events to the game log, and the
  *                 journal-worthy ones (discoveries, POI uses) to the journal.
- *   7. save       call the save hook (persistence arrives in Task 13).
+ *   7. expedition add the turn to the expedition's tally; a return or a
+ *                 defeat finishes the expedition and files its report
+ *                 (systems/expedition.js, Task 12).
+ *   8. save       call the save hook (persistence arrives in Task 13).
  *
  * Nothing here runs on its own: time passes only when an action succeeds.
+ * Between expeditions every action is refused (`noExpedition`) until
+ * `setOut` starts the next one.
  * Simulation only (no DOM).
  */
 import { createPlayer } from '../entities/player.js';
-import { createMapMemory, SIGHT_RADIUS } from '../world/mapMemory.js';
+import { createMapMemory } from '../world/mapMemory.js';
 import { createClock, advanceClock, timeOf } from './clock.js';
 import { validateAction } from './actions.js';
 import { createWorldChanges } from '../world/worldChanges.js';
 import { createJournal } from '../systems/journal.js';
 import { discoverIn } from '../systems/pois.js';
 import { createEnemies } from '../systems/enemies.js';
+import { createProgress } from '../systems/progression.js';
+import {
+  createExpedition, recordTurn, beginExpedition, checkSetOut, sightRadiusOf, maxHealthOf,
+} from '../systems/expedition.js';
 
 /** Most recent log entries kept (older ones are dropped). */
 export const LOG_LIMIT = 100;
@@ -41,19 +50,43 @@ export const LOG_LIMIT = 100;
  * A new game in `world`: the player on the sanctuary with empty packs, a
  * fresh map with the start revealed, an untouched world (no changes from
  * the generated baseline), every enemy at home and unaware (systems/enemies.js), an empty journal, and the clock at turn 0 (day 1,
- * morning). POIs in sight of the start are discovered at turn 0.
+ * morning). POIs in sight of the start are discovered at turn 0. No
+ * insight or upgrades yet (`progress`), and expedition 1 under way.
  */
 export function createGame(world) {
-  const player = createPlayer(world.sanctuary);
   const memory = createMapMemory(world.radius);
   const game = {
-    world, player, memory, changes: createWorldChanges(), journal: createJournal(), clock: createClock(), log: [],
-    enemies: createEnemies(world.enemySpawns ?? []),
+    world, player: null, memory, changes: createWorldChanges(), journal: createJournal(), clock: createClock(), log: [],
+    enemies: createEnemies(world.enemySpawns ?? []), progress: createProgress(), expedition: null,
   };
-  const found = discoverIn(game, memory.observe(player.position, SIGHT_RADIUS).newly);
-  game.log.push(...found);
-  game.journal.record(found, 0);
+  game.player = createPlayer(world.sanctuary, { maxHealth: maxHealthOf(game) });
+  const found = discoverIn(game, memory.observe(game.player.position, sightRadiusOf(game)).newly);
+  appendLog(game, found);
+  game.expedition = createExpedition(game, 1);
   return game;
+}
+
+/** Append events to the capped log and the journal, stamped with the current turn. */
+function appendLog(game, events) {
+  if (!events.length) return;
+  game.log.push(...events);
+  if (game.log.length > LOG_LIMIT) game.log.splice(0, game.log.length - LOG_LIMIT);
+  game.journal.record(events, game.clock.turn);
+}
+
+/**
+ * Set out on the next expedition from the sanctuary (Task 12), once the last
+ * one has ended. Not a turn: no time passes and nothing reacts. Resets only
+ * expedition state (systems/expedition.js `beginExpedition`): note that
+ * `game.player` is replaced. Returns `{ ok: true, events }` (`setOut`,
+ * then any places discovered from the start; logged) or `{ ok: false, reason }`.
+ */
+export function setOut(game) {
+  const v = checkSetOut(game);
+  if (!v.ok) return v;
+  const events = beginExpedition(game);
+  appendLog(game, events);
+  return { ok: true, events };
 }
 
 /**
@@ -71,19 +104,22 @@ export function createGame(world) {
  *   | { type: 'fled', at: object, direction: number, enemies: string[] }
  *   | { type: 'used', item: string, healed: number, health: number, maxHealth: number }
  *   | { type: 'recovered', amount: number, health: number, maxHealth: number }
- *   | { type: 'defeated', at: object, id: number | null, enemy: string | null })
+ *   | { type: 'defeated', at: object, id: number | null, enemy: string | null }
+ *   | { type: 'returned', number: number }
+ *   | { type: 'setOut', number: number, maxHealth: number, sight: number })
  *   & Record<string, unknown>} GameEvent
  *   Events are plain data; the UI formats them (src/ui/clockText.js).
  * @typedef {(game: object, ctx: { action: object, turn: number, time: object, from: object, events: GameEvent[] }) =>
  *   void | { events?: GameEvent[], interrupt?: { reason: string } }} Reaction
  * @typedef {{ ok: true, action: object, cost: number, turn: number, time: object,
- *   events: GameEvent[], revealed: number, interrupt: { reason: string } | null }
+ *   events: GameEvent[], revealed: number, interrupt: { reason: string } | null, ended: object | null }
  *   | { ok: false, action: object, reason: string }} ActionResult
  *
  * @param {{ reactions?: Reaction[], onSave?: ((game: object, result: ActionResult) => void) | null,
- *   sightRadius?: number }} [opts]
+ *   sightRadius?: number | null }} [opts] `sightRadius` overrides the player's
+ *   (by default the base radius plus Cartographer: expedition.js sightRadiusOf).
  */
-export function createTurnSystem({ reactions = [], onSave = null, sightRadius = SIGHT_RADIUS } = {}) {
+export function createTurnSystem({ reactions = [], onSave = null, sightRadius = null } = {}) {
   return {
     /** Run one action through the pipeline. @returns {ActionResult} */
     perform(game, action) {
@@ -111,7 +147,7 @@ export function createTurnSystem({ reactions = [], onSave = null, sightRadius = 
       }
 
       // 5. visibility, then discovery of POIs that just came into sight
-      const { revealed, newly } = game.memory.observe(game.player.position, sightRadius);
+      const { revealed, newly } = game.memory.observe(game.player.position, sightRadius ?? sightRadiusOf(game));
       const found = discoverIn(game, newly);
       if (found.length) {
         events.push(...found);
@@ -119,14 +155,13 @@ export function createTurnSystem({ reactions = [], onSave = null, sightRadius = 
       }
 
       // 6. log and journal
-      if (events.length) {
-        game.log.push(...events);
-        if (game.log.length > LOG_LIMIT) game.log.splice(0, game.log.length - LOG_LIMIT);
-        game.journal.record(events, tick.to);
-      }
+      appendLog(game, events);
 
-      const result = { ok: true, action, cost: v.def.cost, turn: tick.to, time, events, revealed, interrupt };
-      // 7. save
+      // 7. the expedition's tally; a return or a defeat ends the expedition
+      const ended = recordTurn(game, { action, events });
+
+      const result = { ok: true, action, cost: v.def.cost, turn: tick.to, time, events, revealed, interrupt, ended };
+      // 8. save
       if (onSave) onSave(game, result);
       return result;
     },

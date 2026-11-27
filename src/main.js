@@ -29,7 +29,7 @@ async function boot() {
     { attachPointerInput },
     { createHud, describeSelection, coordText },
     { createWorldPanel },
-    { createGame, createTurnSystem },
+    { createGame, createTurnSystem, setOut },
     { planRoute },
     { createTravel },
     { decideTap },
@@ -47,11 +47,14 @@ async function boot() {
     { ENEMY_TYPES },
     combat,
     combatText,
-    { createDefeatPanel },
+    { createSanctuaryPanel },
     contextActions,
     { inventoryView },
     itemText,
     { createInventoryPanel },
+    { buyUpgrade, upgradeView },
+    { lastReport },
+    expeditionText,
   ] = await Promise.all([
     import('./render/canvasSurface.js'),
     import('./render/camera.js'),
@@ -82,11 +85,14 @@ async function boot() {
     import('./data/enemies.js'),
     import('./systems/combat.js'),
     import('./ui/combatText.js'),
-    import('./ui/defeatPanel.js'),
+    import('./ui/sanctuaryPanel.js'),
     import('./ui/contextActions.js'),
     import('./systems/items.js'),
     import('./ui/itemText.js'),
     import('./ui/inventoryPanel.js'),
+    import('./systems/progression.js'),
+    import('./systems/expedition.js'),
+    import('./ui/expeditionText.js'),
   ]);
 
   const canvas = document.getElementById('world-canvas');
@@ -106,9 +112,10 @@ async function boot() {
   }
 
   // Game state (core/game.js): the world, the player (expedition state:
-  // position and inventory), map memory (player persistent state: only
+  // position and inventory; replaced when an expedition sets out), map memory (player persistent state: only
   // known/unknown is saved, Task 13), world changes (gathered nodes, used
-  // POIs), the journal (discoveries), the world clock and the log. `world`, `player` and `memory` are
+  // POIs), the journal (discoveries), the world clock, the log, the
+  // expedition under way and permanent progress (insight, upgrades, reports). `world`, `player` and `memory` are
   // shorthands for the current game's parts, not separate state.
   let game, world, player, memory;
   function useGame(next) {
@@ -160,14 +167,15 @@ async function boot() {
   // Events (e.g. a new day part) from the most recent successful action,
   // appended to the readout that describes that action.
   let lastEvents = [];
-  // A defeat from the most recent action, handled on the next refresh.
-  let pendingDefeat = null;
+  // An expedition ended (return or defeat) by the most recent action,
+  // handled on the next refresh.
+  let pendingEnd = null;
 
   /** Perform one action through the turn pipeline. */
   function act(action) {
     const result = turns.perform(game, action);
     lastEvents = result.ok ? result.events : [];
-    pendingDefeat = lastEvents.find((e) => e.type === 'defeated') ?? pendingDefeat;
+    if (result.ok && result.ended) pendingEnd = result.ended;
     return result;
   }
 
@@ -253,29 +261,29 @@ async function boot() {
   }
 
   /**
-   * After a defeat the game has already carried the player home (systems/
-   * combat.js): drop any route, say what happened, look at the sanctuary and
-   * show the notice.
+   * An expedition has ended (systems/expedition.js): the player is already
+   * at the sanctuary. Drop any route, say what happened, look at the
+   * sanctuary and open the sanctuary screen with the report.
    */
-  function showDefeat(e) {
+  function showEnded() {
+    travel.stop({ silent: true });
     Object.assign(ui, { preview: null, travelTarget: null, selected: null, noWay: null });
     if (inventoryPanel.isOpen) inventoryPanel.close();
-    readoutText = clockText.describeEvents(lastEvents.includes(e) ? lastEvents : [e]);
+    readoutText = clockText.describeEvents(lastEvents);
     updateCamera(camera.centerOnHex(cam, player.position));
-    defeatPanel.show(combatText.describeDefeat(e));
+    sanctuaryPanel.show();
   }
 
   function refresh() {
-    if (pendingDefeat) {
-      const e = pendingDefeat;
-      pendingDefeat = null;
-      showDefeat(e);
+    if (pendingEnd) {
+      pendingEnd = null;
+      showEnded();
     }
     hud.showReadout(readoutText);
     hud.showStatus(text.describePlayer(player));
     hud.showHealth(combatText.describeHealth(player.health, player.maxHealth), player.health, player.maxHealth);
     hud.showClock(clockText.describeClock(game.clock.turn), timeOf(game.clock.turn).part);
-    hud.setWaitEnabled(!travel.active);
+    hud.setWaitEnabled(!travel.active && game.expedition.status === 'active');
     hud.showInventory(itemText.inventoryEntries(player.inventory));
     hud.showActions(contextOptions().map(buttonFor));
     surface.requestRepaint();
@@ -466,6 +474,7 @@ async function boot() {
         if (result.ok) readoutText = clockText.describeEvents(lastEvents);
         else if (kind === 'gather') readoutText = gatherText.describeGatherRefused(result.reason, labelOf(o.at));
         else if (kind === 'interact') readoutText = poiText.describeInteractRefused(result.reason, labelOf(o.at));
+        else if (kind === 'return') readoutText = expeditionText.describeReturnRefused(result.reason);
         else readoutText = combatText.describeCombatRefused(kind, result.reason, o.at && kind === 'attack' ? labelOf(o.at) : '');
         if (result.ok && kind === 'flee') followPlayer();
         refresh();
@@ -492,7 +501,8 @@ async function boot() {
         writeSeedToUrl(world.seed);
         worldPanel.showSeed(world.seed);
         Object.assign(ui, { selected: null, hovered: null, preview: null, noWay: null, travelTarget: null });
-        pendingDefeat = null;
+        pendingEnd = null;
+        sanctuaryPanel.close();
         readoutText = text.MOVE_HINT;
         refresh();
         updateCamera(camera.centerOnHex(cam, player.position));
@@ -541,12 +551,42 @@ async function boot() {
     report,
   );
 
+  // Sanctuary screen: the report of the expedition that just ended, insight
+  // and upgrades, and Set out (the only way back to the map).
+  const sanctuaryPanel = createSanctuaryPanel(
+    {
+      dialog: document.getElementById('sanctuary-dialog'),
+      title: document.getElementById('report-title'),
+      summary: document.getElementById('report-summary'),
+      rows: document.getElementById('report-rows'),
+      insight: document.getElementById('report-insight'),
+      balance: document.getElementById('sanctuary-balance'),
+      upgrades: document.getElementById('upgrade-list'),
+      message: document.getElementById('sanctuary-message'),
+      setOut: document.getElementById('set-out'),
+    },
+    {
+      view: () => ({
+        report: lastReport(game), insight: game.progress.insight, upgrades: upgradeView(game), next: game.expedition.number + 1,
+      }),
+      onBuy(id) {
+        const r = buyUpgrade(game, id);
+        const shown = r.ok ? expeditionText.describeUpgraded(r.event) : expeditionText.describeBuyRefused(r.reason, r.cost ?? null);
+        return shown;
+      },
+      onSetOut() {
+        const r = setOut(game);
+        if (!r.ok) return;
+        useGame(game); // a new expedition has a new player
+        sanctuaryPanel.close();
+        readoutText = clockText.describeEvents(r.events);
+        refresh();
+        updateCamera(camera.centerOnHex(cam, player.position));
+      },
+    },
+  );
+
   // Journal: places discovered and what came of them; tap one to look there.
-  // Defeat notice (Task 12 turns it into the expedition report).
-  const defeatPanel = createDefeatPanel({
-    dialog: document.getElementById('defeat-dialog'),
-    text: document.getElementById('defeat-text'),
-  });
 
   const journalPanel = createJournalPanel(
     {

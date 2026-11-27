@@ -38,17 +38,12 @@ export function describeCombatEvent(e) {
       return `The sanctuary's calm restores ${e.amount} health · ${e.health}/${e.maxHealth}`;
     case 'defeated':
       return e.enemy
-        ? `You fall to the ${nameOf(e.enemy)} · you wake at the sanctuary, wounds tended`
-        : 'You fall · you wake at the sanctuary, wounds tended';
+        ? `You fall to the ${nameOf(e.enemy)} · you wake at the sanctuary, wounds tended, your pack lost`
+        : 'You fall · you wake at the sanctuary, wounds tended, your pack lost';
     default:
       return null;
   }
 }
-
-/** The defeat dialog's message. */
-export const describeDefeat = (e) => (e.enemy
-  ? `The ${nameOf(e.enemy)} brought you down. You wake at the sanctuary with your wounds tended; what you carried is still with you.`
-  : 'You were brought down. You wake at the sanctuary with your wounds tended; what you carried is still with you.');
 
 /** Why a combat action was refused (no turn passes). */
 export function describeCombatRefused(kind, reason, label = '') {

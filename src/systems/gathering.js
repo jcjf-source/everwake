@@ -15,6 +15,7 @@ import { NODE_KINDS } from '../data/resources.js';
 import { hexDistance, hexNeighbor, DIRECTIONS } from '../world/hex.js';
 import { planRoute } from './movement.js';
 import { addItem } from './inventory.js';
+import { effectsOf } from '../data/upgrades.js';
 
 /** Hexes away from a node that the player may gather it from. */
 export const GATHER_REACH = 1;
@@ -59,7 +60,7 @@ export function checkGather(game, at) {
  */
 export function gatherFrom(game, at) {
   const { node, def } = nodeState(game, at);
-  const amount = def.yield;
+  const amount = def.yield + effectsOf(game).gather; // Scavenger (Task 12)
   game.changes.recordGather(at, 1);
   const total = addItem(game.player.inventory, node.resource, amount);
   const left = nodeState(game, at).left;

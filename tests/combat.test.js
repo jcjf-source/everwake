@@ -330,11 +330,12 @@ test('at 0 health the player is defeated: back at the sanctuary, healed, and the
   assert.deepEqual(r.interrupt, { reason: 'enemy' }, 'travel stops (the blow already interrupted)');
   assert.ok(hexEquals(game.player.position, marks.S));
   assert.equal(game.player.health, game.player.maxHealth);
-  assert.equal(countOf(game.player.inventory, 'wood'), 3, 'carried items are kept until Task 12 decides');
+  assert.equal(countOf(game.player.inventory, 'wood'), 0, 'a defeat loses the pack (Task 12)');
+  assert.equal(r.ended?.outcome, 'defeated', 'and ends the expedition');
   assert.deepEqual([wolf.mode, boar.mode], ['returning', 'returning']);
   assert.ok(game.memory.isVisible(marks.S), 'sight follows you home');
   const w = act(turns, game, { type: 'wait' });
-  assert.ok(!types(w).includes('enemyAttack'));
+  assert.deepEqual([w.ok, w.reason], [false, 'noExpedition'], 'nothing happens until you set out again');
 });
 
 test('a defeat interrupts travel', () => {
@@ -399,8 +400,7 @@ test('combat text', () => {
   assert.equal(describeEvent({ type: 'used', item: 'herbs', healed: 5, health: 22, maxHealth: 24 }), 'You use herbs: +5 health · 22/24');
   assert.equal(describeEvent({ type: 'used', item: 'food', healed: 3, health: 20, maxHealth: 24 }), 'You eat food: +3 health · 20/24');
   assert.equal(describeEvent({ type: 'recovered', amount: 2, health: 24, maxHealth: 24 }), "The sanctuary's calm restores 2 health · 24/24");
-  assert.equal(describeEvent({ type: 'defeated', enemy: 'boar' }), 'You fall to the boar · you wake at the sanctuary, wounds tended');
-  assert.match(combatText.describeDefeat({ enemy: 'boar' }), /^The boar brought you down\./);
+  assert.equal(describeEvent({ type: 'defeated', enemy: 'boar' }), 'You fall to the boar · you wake at the sanctuary, wounds tended, your pack lost');
   const hit = { type: 'enemyAttack', enemy: 'wolf', charge: false, parting: false, guarded: false, cover: 0, damage: 2, health: 22, maxHealth: 24 };
   assert.equal(describeEvent(hit), 'The wolf attacks: 2 damage · health 22/24');
   assert.equal(describeEvent({ ...hit, parting: true }), 'The wolf strikes as you pull away: 2 damage · health 22/24');

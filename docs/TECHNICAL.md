@@ -19,7 +19,7 @@ This document records implementation decisions. Decisions may evolve, but change
 - `src/data/`: terrain, items, enemy definitions, upgrade definitions.
 Names are suggestions; keep structure simple and consistent with the actual project.
 
-## Current project layout (Tasks 00–11)
+## Current project layout (Tasks 00–12)
 - `index.html` at the repository root is the entry point; `css/main.css` holds styles; `src/main.js` boots the app.
 - `src/main.js` statically imports only `src/core/errorReporter.js`, then loads everything else with dynamic `import()`. That way a failure in any later module still appears on screen.
 - `src/render/canvasSurface.js` sizes the canvas to its CSS box at `devicePixelRatio` (capped at 3) and sets the context transform so drawing uses CSS pixels. It repaints on resize and when `requestRepaint()` is called (at most once per animation frame). There is no continuous loop. `getSize()` returns the canvas box in CSS pixels.
@@ -278,7 +278,7 @@ Actions should be explicit and validated. Suggested pipeline: validate action �
 - **Roster** (`src/systems/enemies.js` `createEnemies`, *live world state*): `game.enemies` is `{ list, at(h), add(type, at), moveTo(enemy, h) }`.
   - Each enemy is `{ id, type, home, position, health, mode }`.
   - `at(h)` returns the living enemy on a hex. `moveTo` keeps the hex index in step.
-  - It is not saved yet. Task 13 decides how much of it persists, and Task 12 whether enemies reset between expeditions.
+  - It is not saved yet (Task 13). Between expeditions `reset()` sends every living enemy home, healed and idle; fallen enemies stay fallen (Task 12).
 - **AI** (`createEnemyReaction({ attack })`, registered in `main.js`): every living enemy acts once per successful action, in id order. It acts after the player's action and the clock, and before visibility. Nothing runs on refused actions or while idle.
   - **`idle`** (at home): when the player comes within `detectRange`, it switches to `hunting`, emits an `enemyDetected` event and sets `interrupt: { reason: 'enemy' }`. It then acts in the same turn.
   - **`hunting`:** it may give up (`enemyDisengaged`, reason `distance`, `territory` or `sanctuary`) and switch to `returning`. Otherwise:
@@ -320,7 +320,7 @@ Actions should be explicit and validated. Suggested pipeline: validate action �
 
 ## Combat (Task 10)
 - **Where:** `src/systems/combat.js` (rules), `src/data/consumables.js`, terrain `cover` (`src/data/terrain.js`), `src/ui/combatText.js`, `src/ui/contextActions.js`, `src/ui/defeatPanel.js`. There is no combat mode: an encounter is ordinary turns on the hex map, through the same pipeline.
-- **Player stats** (`src/entities/player.js`): `player.health` / `player.maxHealth` (24) are expedition state. Attack and defense are not stored: `playerStats(player)` derives them from `PLAYER_BASE` plus worn equipment (Task 11: base 2/0, starting kit 4/1). Upgrades (Task 12) plug in there too.
+- **Player stats** (`src/entities/player.js`): `player.health` / `player.maxHealth` (24) are expedition state. Attack and defense are not stored: `playerStats(player)` derives them from `PLAYER_BASE` plus worn equipment (Task 11: base 2/0, starting kit 4/1). Since Task 12 `maxHealth` is set at the start of each expedition from the base plus Survivor.
 - **Blows** are deterministic: `damage = max(1, attack + charge bonus − (defense + cover + defend bonus))`.
   - `cover` is the defender's terrain: forest 1, dense forest 2, else 0. It applies to the player and to enemies.
   - Defend adds `DEFEND_BONUS` = 2 against every blow that turn (the enemy strike reads `action.type === 'defend'`; nothing is stored).
@@ -332,14 +332,14 @@ Actions should be explicit and validated. Suggested pipeline: validate action �
   - `flee`: only while a hunting enemy is within its reach of you (`notEngaged`). `fleeTarget` picks the walkable, unoccupied neighbour farthest from every enemy in sight, which must be at least 2 from all of them (else `cornered`); ties go nearer the sanctuary, then cheaper ground, then `DIRECTIONS` order. See "Breaking off" under Enemies for its effect.
   - `use { item }`: herbs heal 5, food 3, capped at maximum health. Refusals: `notUsable`, `noItem`, `fullHealth`. `inventory.removeItem` was added. (Task 11 moved this to `systems/items.js` and extended it to every consumable.)
 - **Reactions** (`createCombatReactions()`, registered by `main.js` and the browser check): the enemy reaction with `enemyStrike`, then `createConditionReaction()`:
-  - at 0 health, **defeat**: the player is moved to the sanctuary with full health, every hunting enemy switches to `returning`, and a `defeated { at, id, enemy }` event is emitted (the felling blow is found in the turn's events, which reactions now receive as `ctx.events`). Carried items are kept: Task 12 decides what a defeat costs and adds the report;
+  - at 0 health, **defeat**: the player is moved to the sanctuary with full health, every hunting enemy switches to `returning`, and a `defeated { at, id, enemy }` event is emitted (the felling blow is found in the turn's events, which reactions now receive as `ctx.events`). Since Task 12 a defeat also ends the expedition (see "Expeditions, progression and the sanctuary");
   - otherwise, ending a turn on sanctuary ground while hurt restores `SANCTUARY_RECOVERY` = 2 (`recovered` event).
 - **Events:** `playerAttack`, `enemyDefeated`, `defended`, `fled`, `used`, `recovered`, `defeated`; `enemyAttack` now carries `parting`, `guarded`, `cover`, `health`, `maxHealth`. All go to `game.log`; none to the journal. Text: `combatText.describeCombatEvent` (routed by `clockText.describeEvent`), and `enemyText` words real blows ("The wolf strikes as you pull away: 2 damage · health 22/24").
 - **UI:**
   - `#health-status` under the position line: "Health 22/24" over a bar (`--hp`), red border at a third or less; `role="meter"` with value attributes.
   - The context row (`src/ui/contextActions.js`, shared with the browser check): Attack per adjacent enemy (arrow and damage), Defend, Flee (arrow), Use/Eat while hurt, then POI and Gather buttons. Only valid options are shown, and each press still goes through the pipeline; a refusal is explained by `describeCombatRefused`.
   - The readout after a combat action is the turn's events ("You strike the wolf for 3 · wolf 5/8 · The wolf attacks: 2 damage · health 22/24").
-  - Defeat: `main.js` drops any route, recentres on the sanctuary, sets the readout to the turn's events and opens `#defeat-dialog` (closing it only acknowledges). Task 12 replaces it with the expedition report.
+  - Defeat: `main.js` drops any route, recentres on the sanctuary, sets the readout to the turn's events and, since Task 12, opens the sanctuary screen with the expedition report (the defeat dialog was removed).
   - Tapping an enemy still only inspects it (no turn); attacking is always a button, so a mis-tap never starts a fight.
 - **Deferred:** loot and rewards from enemies (done in Task 11), defeat costs and the report (Task 12), enemy persistence and respawning (Tasks 12–13), ranged attacks, randomness in blows, elevation effects.
 
@@ -363,6 +363,62 @@ Actions should be explicit and validated. Suggested pipeline: validate action �
   - `src/ui/inventoryPanel.js`: the **Pack** dialog (`#pack-dialog`), opened by `#pack-button` beside the inventory line. Every button is one pipeline action via `main.js` `onAction`. Buttons that fail their check are disabled, with a short reason beside them. The dialog stays open, re-renders and shows the outcome in `#pack-message`; focus returns to the same button (`data-key`). Opening it stops travel, and a defeat closes it before the defeat notice.
   - The Pack button sits in the status block rather than the right-hand icon stack: a sixth icon crowded the stack into the top bar at 844×390. On short screens the dialog hides its title and note and scrolls as one panel (no nested scrolling list).
 - **Deferred:** carry capacity and weight (the design allows deferring it, and nothing displays it); dropping items; durability; crafting with materials; what a defeat costs in carried items (Task 12); saving the inventory (Task 13).
+
+## Expeditions, progression and the sanctuary (Task 12)
+- **State:**
+  - `game.expedition` is *expedition state*: `{ number, status: 'active' | 'ended', startTurn, knownAtStart, tally }`.
+  - `game.progress` is *player persistent state*: `{ insight, upgrades: { id: level }, history: [report…] }`.
+  - `createGame` starts expedition 1 at turn 0.
+  - Neither is saved yet (Task 13).
+- **Pipeline:** stage 7 (`systems/expedition.js` `recordTurn`) adds each successful turn to the tally from its action and events:
+  - steps (`move`/`flee`) and the farthest distance from the sanctuary;
+  - `gathered`; `found` (POI finds and enemy loot);
+  - `defeated` by type; `places` (`discovered`) and `explored` (`interacted`).
+  - Hexes mapped is derived as `memory.knownCount − knownAtStart`. The start's own view does not count.
+  - A `returned` or `defeated` event finishes the expedition. The result carries `ended` (the report) or null.
+  - The save stage moved to 8.
+- **Ending:** both endings are ordinary one-turn actions or turns, so enemies, logging and saving behave as usual.
+  - **Return:** the `return` action (`checkReturn`) works on sanctuary ground (the ward) once the expedition has taken a turn. Refusals: `notAtSanctuary`, `notStarted`, `noExpedition`. It puts the player on the sanctuary hex.
+  - **Defeat:** the Task 10 condition reaction still carries the player home. The expedition then empties the pack.
+  - `finishExpedition` files the report: the tally summary, `outcome`, `cause` (enemy type), the `insight` breakdown, and `pack` (what was kept or lost).
+  - It adds the insight to the balance and appends the report to `history`.
+  - While an expedition is ended, `validateAction` refuses every action with `noExpedition`.
+- **Loot rule:** returning keeps everything carried and worn. A defeat loses everything carried and worn.
+- **Setting out** (`core/game.js` `setOut` → `beginExpedition`) takes no turn. The clock carries on.
+  - It replaces `game.player`: on the sanctuary, at full health, with `maxHealthOf` (base + Survivor).
+  - **Pack:** after a return, the kept pack is passed through `resupply`, which tops supplies up to the starting kit and wears kit gear in empty slots (a carried spare first). After a defeat, the pack is the starting kit.
+  - `enemies.reset()` sends survivors home.
+  - It observes the start with the current sight radius and discovers places in view.
+  - The `setOut` event and any discoveries are logged.
+- **Kept across expeditions:** the world and seed, map memory, the journal, world changes, fallen enemies, the clock, insight, upgrades and history.
+- **Insight** (`systems/progression.js` `INSIGHT`) rewards discovery over fighting. It is the same for either ending:
+  - 1 per 5 hexes mapped;
+  - 5 per place discovered;
+  - 2 per place use;
+  - 3 per enemy defeated.
+  A careful 24-turn walk out and back earns about 40.
+- **Upgrades** (`src/data/upgrades.js`; costs rise per level; `validateUpgrade` is tested). Effects are derived from the levels owned (`effectsOf(game)`) and never copied:
+  - **Survivor:** +4 maximum health per level (3 levels: 25/50/90).
+  - **Cartographer:** +1 sight radius per level (40/80). The pipeline's visibility stage uses `sightRadiusOf(game)` unless `createTurnSystem` is given `sightRadius`. Detection ranges stay within sight.
+  - **Pathfinder:** enemies' detection range −1 per level, never below 1 (30/60). `enemies.js` `detectRangeOf`.
+  - **Scavenger:** +1 per gather per level (30/60). `gathering.js` `gatherFrom`.
+  `checkBuy`/`buyUpgrade` work only between expeditions. Refusals: `unknownUpgrade` (own properties only), `onExpedition`, `maxed`, `tooCostly`. A refusal changes nothing. Bought levels apply from the next set-out.
+- **UI:**
+  - The context row offers **Return** last, on sanctuary ground once the expedition has begun (`contextActions`, `expeditionText.returnButton`).
+  - When an expedition ends, `main.js` `showEnded` stops travel, closes the Pack, shows the turn's events in the readout, recentres and opens the **sanctuary screen** (`src/ui/sanctuaryPanel.js`, `#sanctuary-dialog`). It shows:
+    - the report title and summary;
+    - a row per stat (distance, time, hexes mapped, places, gathered, found, enemies, ending, kept/lost pack);
+    - the insight breakdown and balance;
+    - the upgrades (level, effect now and next, a Learn button disabled with a reason);
+    - **Set out · expedition N**.
+  - Escape is ignored: Set out is the only way back, since nothing can happen in the world meanwhile. Learning keeps focus on the button, or moves it to Set out once that button is disabled.
+  - Text is in `src/ui/expeditionText.js`; `clockText.describeEvent` routes `returned`/`setOut`.
+- **Deferred:**
+  - saving progress and the expedition (Task 13);
+  - sanctuary facilities (storage, healer, smith);
+  - choosing what to take out of the kept pack;
+  - an insight display outside the sanctuary screen;
+  - enemy respawning.
 
 ## Rendering and input
 - Canvas handles world rendering; DOM/CSS handles panels and UI controls.
@@ -398,6 +454,7 @@ Actions should be explicit and validated. Suggested pipeline: validate action �
 - 2026-11-27 (Task 07): Resource nodes are part of the generated world definition, placed per coordinate from hashes and terrain suitability. Gathering only ever records changes in a separate persistent layer (gathers taken per hex), so the baseline is reproducible and saves stay small. Nodes are gathered from their hex or any neighbour, so nodes on impassable terrain are usable from beside them; tapping a far one routes next to it, and "blocked" means no mapped approach exists. The UI offers one Gather button per valid option rather than a target-picking mode, which keeps it to one tap on touch. Nodes do not regrow (deferred).
 - 2026-11-27 (Task 08): Points of interest are part of the world definition, placed per cell from hashes and local terrain, with spacing rules that read only nearby cells, so placement is order-independent. What a POI yields is also seeded; only uses taken are stored, as persistent world changes. A POI counts as discovered once its hex is mapped (no second flag). Sighting one interrupts travel, because discovery is the kind of meaningful event the design says should stop movement. Every interaction is one `interact` action costing one turn from the POI's hex or a neighbour, the same reach as gathering. Shrines give knowledge (they map the land around them) rather than items. The journal is a separate, uncapped, persistent record of discovery and interaction events, distinct from the capped turn log.
 - 2026-11-27 (Task 09): Enemy homes are part of the world definition (seeded per cell, plus ruin guards). Where enemies are and what they are doing is live state in `game.enemies`, changed only by the enemy reaction in the turn pipeline, so nothing moves while idle. The AI is a three-mode state machine (idle, hunting, returning) with derived intent, a fixed order and no randomness, so it is easy to debug. Detection range never exceeds the player's sight, so being noticed is always visible and nothing leaks through fog. Enemies occupy hexes and route with the same A* and walkability as the player. The sanctuary and its neighbours are safe ground. Attacks are a handoff (`attack(game, enemy, { charge })`): until Task 10 the stub reports them and deals no damage, and the readout says so.
+- 2026-11-27 (Task 12): An expedition ends by an explicit one-turn Return on sanctuary ground, or by defeat. Both go through the pipeline, which keeps the tally from turn events, so the report cannot disagree with what happened. Returning keeps the whole pack for the next expedition (topped up with the kit's basics). Defeat loses everything carried and worn, and the next expedition starts with the basic kit. That is the risk/return trade-off: insight is earned the same either way, from discovery more than kills. All four upgrades are implemented. Their effects are derived from the levels owned, and they apply from the next expedition. Pathfinder is interpreted as stealth (enemies notice you from closer), because movement already costs one turn per hex and terrain cost only shapes routes. Between expeditions living enemies go home healed; the fallen stay fallen, so the world changes, but loot cannot be farmed. The sanctuary is a modal screen between expeditions rather than a separate scene, and world time carries on.
 - 2026-11-27 (Task 11): Items are data, and one inventory object holds everything carried and worn, so gathering, finds, loot and the UI cannot drift apart. A worn item is held in its slot, not counted among the carried items, so the counts mean "spare". Using, equipping and unequipping are ordinary one-turn actions in the pipeline (enemies react), and every check is side-effect free, so a refusal costs nothing. Stats are derived (base plus gear), and the starting kit reproduces the Task 10 tuning. Enemy loot is seeded per enemy home, like chest contents. Carry capacity is deferred rather than shown as a number that does nothing.
 - 2026-11-27 (Task 10): Combat happens on the hex map inside the normal turn pipeline, with no separate combat mode or screen. Blows are deterministic (attack − defense, at least 1, adjusted by cover, Defend and charges) so a fight can be read and planned, and the Attack button shows the damage in advance. Walking away from an adjacent enemy gives it a parting strike; that is what makes Flee (a clean break that also costs the enemy its turn) worth having, since stepping away was otherwise always free. Defeat is handled minimally but for real: the player wakes at the sanctuary healed and hunters lose the trail; what a defeat costs (loot, report) is left to Task 12. Herbs and food heal, so the existing resources serve as consumables until Task 11. Boar defense went 2→1 and skeleton 3→2 so fights with base stats take 3–5 blows.
 - 2026-11-27 (Task 05): Fog uses three per-hex states with a plain hex-distance sight radius of 4. Only known/unknown is persisted; visibility is derived from position. Route planning and tap feedback use only mapped hexes, so fog cannot be seen through via previews or error messages. Unknown hexes are not drawn at all. The map view is a dialog that reuses the main renderer, not an always-on minimap, to keep the phone screen clear.

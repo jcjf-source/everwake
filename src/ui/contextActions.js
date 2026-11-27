@@ -5,7 +5,8 @@
  *
  * Order: combat first (attack each enemy beside you, defend, flee), then
  * consumables while hurt, then points of interest in reach, then resource
- * nodes in reach. Only valid options are offered, and each still goes
+ * nodes in reach, and last Return (end the expedition) on sanctuary
+ * ground once it has begun. Only valid options are offered, and each still goes
  * through the turn pipeline when pressed. Nothing is offered while
  * travelling (a tap stops travel first).
  */
@@ -16,9 +17,11 @@ import { gatherOptions } from '../systems/gathering.js';
 import { combatButton } from './combatText.js';
 import { gatherButton } from './gatherText.js';
 import { interactButton } from './poiText.js';
+import { checkReturn } from '../systems/expedition.js';
+import { returnButton } from './expeditionText.js';
 
 /**
- * @typedef {{ kind: 'attack' | 'defend' | 'flee' | 'use' | 'interact' | 'gather', o: object }} ContextOption
+ * @typedef {{ kind: 'attack' | 'defend' | 'flee' | 'use' | 'interact' | 'gather' | 'return', o: object }} ContextOption
  * @returns {ContextOption[]}
  */
 export function contextOptions(game, { travelling = false } = {}) {
@@ -32,6 +35,7 @@ export function contextOptions(game, { travelling = false } = {}) {
     ...useOptions(game).map((o) => ({ kind: 'use', o })),
     ...interactOptions(game).map((o) => ({ kind: 'interact', o })),
     ...gatherOptions(game).map((o) => ({ kind: 'gather', o })),
+    ...(checkReturn(game).ok ? [{ kind: 'return', o: {} }] : []),
   ];
 }
 
@@ -42,6 +46,7 @@ export function buttonFor({ kind, o }) {
     case 'interact': return { key: `p${o.at.q},${o.at.r}`, kind, poi: o.poi.type, ...interactButton(o) };
     case 'attack': return { key: `a${o.at.q},${o.at.r}`, kind, enemy: o.enemy.type, ...combatButton(kind, o) };
     case 'use': return { key: `u${o.item}`, kind, resource: o.item, ...combatButton(kind, o) };
+    case 'return': return { key: kind, kind, ...returnButton() };
     default: return { key: kind, kind, ...combatButton(kind, o) };
   }
 }
@@ -51,6 +56,7 @@ export function actionFor({ kind, o }) {
   switch (kind) {
     case 'defend': return { type: 'defend' };
     case 'flee': return { type: 'flee' };
+    case 'return': return { type: 'return' };
     case 'use': return { type: 'use', item: o.item };
     default: return { type: kind, at: o.at }; // attack, interact, gather
   }

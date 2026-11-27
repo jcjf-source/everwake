@@ -4,7 +4,8 @@
  *
  * The roster starts from the world's generated spawns (enemyPlacement.js)
  * and is *live world state*: positions and modes change as the player acts.
- * It is not saved yet (Task 13 decides how much of it persists).
+ * It is not saved yet (Task 13 decides how much of it persists). Between
+ * expeditions the survivors go home healed (`reset`); the fallen stay fallen.
  *
  * AI (deterministic; every enemy acts once per player action, in id order,
  * after the player and the clock, and never while the game is idle):
@@ -46,6 +47,7 @@ import { ENEMY_TYPES } from '../data/enemies.js';
 import { TERRAIN } from '../data/terrain.js';
 import { DIRECTIONS, hexAdd, hexDistance, hexEquals, hexKey } from '../world/hex.js';
 import { findPath } from '../world/pathfinding.js';
+import { effectsOf } from '../data/upgrades.js';
 
 /** Hexes closer than this to the sanctuary are warded: no enemy enters, and none hunts you there. */
 export const SANCTUARY_WARD = 2;
@@ -95,6 +97,20 @@ export function createEnemies(spawns = []) {
     kill(enemy) {
       enemy.health = 0;
       if (byHex.get(hexKey(enemy.position)) === enemy) byHex.delete(hexKey(enemy.position));
+    },
+    /**
+     * Between expeditions (systems/expedition.js): every living enemy goes
+     * back home, healed and unaware. Fallen enemies stay fallen.
+     */
+    reset() {
+      byHex.clear();
+      for (const e of list) {
+        if (e.health <= 0) continue;
+        e.position = { q: e.home.q, r: e.home.r };
+        e.health = ENEMY_TYPES[e.type].health;
+        e.mode = 'idle';
+        byHex.set(hexKey(e.position), e);
+      }
     },
     /** Move `enemy` to `h` (no rules checked here; the AI checks them). */
     moveTo(enemy, h) {
@@ -195,8 +211,14 @@ function giveUpReason(game, enemy) {
   return null;
 }
 
+/**
+ * How close the player must be for `enemy` to notice them: its archetype's
+ * range, less the Pathfinder upgrade (Task 12), never below 1.
+ */
+export const detectRangeOf = (game, enemy) => Math.max(1, ENEMY_TYPES[enemy.type].detectRange - effectsOf(game).stealth);
+
 const notices = (game, enemy) => !inWard(game, game.player.position)
-  && hexDistance(enemy.position, game.player.position) <= ENEMY_TYPES[enemy.type].detectRange
+  && hexDistance(enemy.position, game.player.position) <= detectRangeOf(game, enemy)
   && !giveUpReason(game, enemy);
 
 /** One enemy's turn. @returns {{ events: object[], interrupt: boolean }} */
