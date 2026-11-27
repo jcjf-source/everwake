@@ -52,6 +52,7 @@
     </nav>
 
     <section class="hud-info" aria-label="Status">
+      <p id="save-warning" class="hud-status hud-status--warning" role="status"></p>
       <p id="player-status" class="hud-status"></p>
       <p id="health-status" class="hud-status hud-status--health" role="meter" aria-label="Health"
          aria-valuemin="0"></p>
@@ -88,13 +89,65 @@
         <button type="button" id="seed-random" class="hud-button">Random</button>
       </div>
       <p id="seed-error" class="world-dialog__error" aria-live="polite"></p>
-      <p id="seed-note" class="world-dialog__note">The same seed always creates the same map. Creating a world replaces the current map.</p>
+      <p id="seed-note" class="world-dialog__note">The same seed always creates the same map. A new world replaces this one: you will be asked to confirm.</p>
       <div class="world-dialog__actions">
         <button type="button" id="seed-cancel" class="hud-button">Cancel</button>
         <button type="submit" id="seed-create" class="hud-button hud-button--primary">Replace world</button>
       </div>
+      <h3 class="pack-heading">Save</h3>
+      <p id="save-status" class="world-dialog__note save-status"></p>
+      <div class="world-dialog__actions world-dialog__actions--start">
+        <button type="button" id="save-export" class="hud-button" title="Download this world's save as a file">Export save</button>
+        <button type="button" id="save-import" class="hud-button" title="Load a save file (you will be asked to confirm)">Import save</button>
+      </div>
+      <p id="save-message" class="pack-message" aria-live="polite"></p>
     </form>
   </dialog>
+
+  <dialog id="start-dialog" class="world-dialog start-dialog" aria-labelledby="start-title" aria-describedby="start-summary">
+    <div class="world-dialog__form">
+      <h2 id="start-title">Welcome back</h2>
+      <p id="start-summary" class="world-dialog__current"></p>
+      <p id="start-detail" class="world-dialog__note"></p>
+      <p id="start-link" class="world-dialog__note start-link" hidden></p>
+      <p id="start-message" class="pack-message" aria-live="polite"></p>
+      <div class="world-dialog__actions">
+        <button type="button" id="start-import" class="hud-button">Import save</button>
+        <button type="button" id="start-new" class="hud-button">New world</button>
+        <button type="button" id="start-continue" class="hud-button hud-button--primary">Continue</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="recovery-dialog" class="world-dialog recovery-dialog" aria-labelledby="recovery-title" aria-describedby="recovery-reason">
+    <div class="world-dialog__form">
+      <h2 id="recovery-title">Your save could not be loaded</h2>
+      <p id="recovery-reason" class="world-dialog__current"></p>
+      <p class="world-dialog__note">Nothing has been deleted, and the game will not save over it until you choose. Download it to keep a copy, try loading it again, import another save, or start a new world (the damaged save is kept as a backup in this browser).</p>
+      <p id="recovery-message" class="pack-message" aria-live="polite"></p>
+      <div class="world-dialog__actions">
+        <button type="button" id="recovery-download" class="hud-button">Download damaged save</button>
+        <button type="button" id="recovery-retry" class="hud-button">Try again</button>
+        <button type="button" id="recovery-import" class="hud-button">Import save</button>
+        <button type="button" id="recovery-new" class="hud-button hud-button--primary">New world</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="confirm-dialog" class="world-dialog confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-lines">
+    <div class="world-dialog__form">
+      <h2 id="confirm-title"></h2>
+      <div id="confirm-lines" class="confirm-lines"></div>
+      <p id="confirm-message" class="pack-message" aria-live="polite"></p>
+      <div class="world-dialog__actions">
+        <button type="button" id="confirm-export" class="hud-button" hidden>Export save first</button>
+        <button type="button" id="confirm-cancel" class="hud-button"></button>
+        <button type="button" id="confirm-ok" class="hud-button hud-button--danger"></button>
+      </div>
+    </div>
+  </dialog>
+
+  <input type="file" id="import-file" accept=".json,application/json" hidden>
 
   <dialog id="map-dialog" class="world-dialog map-dialog" aria-labelledby="map-dialog-title">
     <form class="world-dialog__form" method="dialog">
@@ -156,6 +209,8 @@
       <p id="sanctuary-message" class="pack-message" aria-live="polite"></p>
       <p class="world-dialog__note">Insight is earned by mapping land, finding and exploring places, and defeating enemies. Upgrades last for good and apply from your next expedition.</p>
       <div class="world-dialog__actions">
+        <button type="button" id="sanctuary-world" class="hud-button" aria-haspopup="dialog"
+                title="World seed and save: new world, export or import">World &amp; save</button>
         <button type="button" id="set-out" class="hud-button hud-button--primary">Set out</button>
       </div>
     </div>

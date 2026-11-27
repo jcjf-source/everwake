@@ -75,6 +75,10 @@ export function createHud(el, handlers) {
     showStatus(text) {
       el.status.textContent = text;
     },
+    /** A warning while the game is not being saved (Task 13); hidden when empty. */
+    showSaveWarning(text) {
+      if (el.saveWarning && el.saveWarning.textContent !== text) el.saveWarning.textContent = text;
+    },
     /** Health line ("Health 18/24") with a bar; `data-low` marks a third or less. */
     showHealth(text, health, max) {
       el.health.textContent = text;

@@ -19,7 +19,7 @@ This document records implementation decisions. Decisions may evolve, but change
 - `src/data/`: terrain, items, enemy definitions, upgrade definitions.
 Names are suggestions; keep structure simple and consistent with the actual project.
 
-## Current project layout (Tasks 00–12)
+## Current project layout (Tasks 00–13)
 - `index.html` at the repository root is the entry point; `css/main.css` holds styles; `src/main.js` boots the app.
 - `src/main.js` statically imports only `src/core/errorReporter.js`, then loads everything else with dynamic `import()`. That way a failure in any later module still appears on screen.
 - `src/render/canvasSurface.js` sizes the canvas to its CSS box at `devicePixelRatio` (capped at 3) and sets the context transform so drawing uses CSS pixels. It repaints on resize and when `requestRepaint()` is called (at most once per animation frame). There is no continuous loop. `getSize()` returns the canvas box in CSS pixels.
@@ -47,7 +47,7 @@ Names are suggestions; keep structure simple and consistent with the actual proj
   - Zoom buttons step ×1.25 about the viewport centre and are disabled at the zoom limits.
   - Centre recentres on the player (Task 04; previously the selected hex or the sanctuary).
   - The readout is the single feedback line: the movement hint, the inspected hex, the route preview, travel progress, or why a hex cannot be reached. `#player-status` shows position; `#clock-status` shows the day part, day and turn (Task 06), with the Wait button beside it.
-- `src/ui/worldPanel.js`: the Seed button and a `<dialog>` for a new world (typed or Random seed, Cancel, Replace world). Replacing is a deliberate second step, never a single tap. The seed lives in the URL query (`?seed=`) until persistence exists (Task 13). An invalid or missing URL seed falls back to a random seed.
+- `src/ui/worldPanel.js`: the Seed button and a `<dialog>` for a new world (typed or Random seed, Cancel, Replace world), with a Save section (status, Export save, Import save) since Task 13. Replace world never replaces anything by itself: it asks for confirmation first (see "Persistence"). The seed is also written to the URL query (`?seed=`) for sharing; the save, not the URL, is what a reload restores. With no save, a URL seed starts that world; an invalid or missing one falls back to a random seed.
 - UI and view state (`hovered`, `selected`, `showCoords`, camera) live in `main.js`. They are not game state and are not saved. The current `world` object is replaced as a whole when a new seed is chosen.
 - The Task 00 placeholder title scene (`placeholderScene.js`) was removed in Task 01 now that the grid is the main view.
 - Error reporting: `window` `error` and `unhandledrejection` handlers, plus a `report()` function for caught errors, add entries to the on-screen `#error-panel`. They never call `preventDefault()`, and caught errors are also passed to `console.error`, so nothing is hidden from the console.
@@ -278,7 +278,7 @@ Actions should be explicit and validated. Suggested pipeline: validate action �
 - **Roster** (`src/systems/enemies.js` `createEnemies`, *live world state*): `game.enemies` is `{ list, at(h), add(type, at), moveTo(enemy, h) }`.
   - Each enemy is `{ id, type, home, position, health, mode }`.
   - `at(h)` returns the living enemy on a hex. `moveTo` keeps the hex index in step.
-  - It is not saved yet (Task 13). Between expeditions `reset()` sends every living enemy home, healed and idle; fallen enemies stay fallen (Task 12).
+  - It is saved whole since Task 13 (`serialize`, `restoreEnemies`), so a reload mid-chase resumes the chase. Between expeditions `reset()` sends every living enemy home, healed and idle; fallen enemies stay fallen (Task 12).
 - **AI** (`createEnemyReaction({ attack })`, registered in `main.js`): every living enemy acts once per successful action, in id order. It acts after the player's action and the clock, and before visibility. Nothing runs on refused actions or while idle.
   - **`idle`** (at home): when the player comes within `detectRange`, it switches to `hunting`, emits an `enemyDetected` event and sets `interrupt: { reason: 'enemy' }`. It then acts in the same turn.
   - **`hunting`:** it may give up (`enemyDisengaged`, reason `distance`, `territory` or `sanctuary`) and switch to `returning`. Otherwise:
@@ -369,7 +369,7 @@ Actions should be explicit and validated. Suggested pipeline: validate action �
   - `game.expedition` is *expedition state*: `{ number, status: 'active' | 'ended', startTurn, knownAtStart, tally }`.
   - `game.progress` is *player persistent state*: `{ insight, upgrades: { id: level }, history: [report…] }`.
   - `createGame` starts expedition 1 at turn 0.
-  - Neither is saved yet (Task 13).
+  - Both are saved with the game (Task 13).
 - **Pipeline:** stage 7 (`systems/expedition.js` `recordTurn`) adds each successful turn to the tally from its action and events:
   - steps (`move`/`flee`) and the farthest distance from the sanctuary;
   - `gathered`; `found` (POI finds and enemy loot);
@@ -433,6 +433,47 @@ Actions should be explicit and validated. Suggested pipeline: validate action �
 - Save after significant actions. Include world seed, persistent mutations, player permanent state, map knowledge, and active expedition state if design permits resume.
 - Provide a deliberate reset flow and, when feasible, save export/import.
 
+### Implementation (Task 13)
+- **Storage:** one saved world in `localStorage` under `everwake.save` (a few KB: about 3.5 KB at the start, growing slowly with the journal and expedition reports). IndexedDB is not needed at this size. `src/systems/saveSlot.js` wraps it; the storage object is passed in, so tests use an in-memory stand-in.
+- **Format** (`src/systems/persistence.js`): `{ format: 'everwake-save', version: 1, savedAt, world, clock, memory, sight, changes, journal, enemies, player, expedition, progress, log }`.
+  - **The world is not saved.** It is regenerated from the seed. `world` records the seed, radius, sanctuary and the four generator versions (terrain, resources, POIs, enemies). A save whose baseline would differ is refused rather than applied to a different map.
+  - Each part uses its module's own versioned save form: clock, map memory (known-hex bitset), world changes, journal, and (new) the enemy roster `[[id, q, r, health, mode]…]`, whose type and home come from the world's spawns. The rest (player, expedition, progress, log) is plain data.
+  - **Everything in the game object is saved, including an expedition under way:** a reload resumes exactly where the player stood, hunted or not. Travel in progress, route previews, the camera and selection are UI state and are not saved.
+  - **Visibility:** `mapMemory.sight` (the radius of the last look) is saved, and `showSight` restores what was in sight without mapping anything. So a reload never reveals land or discovers places, even after Cartographer was bought between expeditions.
+- **Validation:** `restoreGame` checks every part and how the parts fit together before building anything. It never throws (unexpected errors become a reason), never half-applies and never changes its input. Beyond each part's form it checks:
+  - recorded gathers and place uses belong to a generated node/POI and do not exceed its uses;
+  - journal entries name real places;
+  - every spawn is listed once; living enemies stand on distinct walkable hexes outside the ward, and not on the player;
+  - the player stands on walkable map ground with 1..max health; item, slot and upgrade ids are known; upgrade levels are within range;
+  - the expedition number matches the report history (one report per finished expedition); between expeditions the player is at the sanctuary;
+  - every report's turns and insight add up; the sight radius is one the player could have.
+  A newer save format is reported as such ("made by a newer version").
+- **Autosave** (`main.js` `autosave`): after every successful action (the pipeline's save stage), after setting out, after learning an upgrade, and when a new world or an imported save is put in play. A new world is saved at once. Every write is read back and compared. Loading never rewrites the save. A failed write (for example full storage) keeps the last good save, shows "Not saved · …" in the HUD and in the world dialog's status, and logs a console warning.
+- **Opening the page:**
+  - no save: a new world (URL seed or random), saved immediately;
+  - a save: the **start screen** (`ui/savePanels.js`), with Continue (focused; Escape too), New world and Import save. If the link names another world, the start screen says so and New world offers that seed; the saved world is never replaced by a link alone;
+  - between expeditions, Continue reopens the sanctuary screen with the last report (`refresh` keeps the sanctuary screen up whenever the expedition is over and no other dialog is open);
+  - **a damaged save** (bad JSON, failed validation): the **recovery screen** gives the reason. It cannot be dismissed: if Chrome lets Escape close it (it was opened without a user gesture), it reopens. A throwaway world sits behind it and autosave is held, so the damaged save is never overwritten. The choices are: Download damaged save (raw text), Try again (reload), Import save, or New world. Replacing it first copies the raw text to `everwake.save.damaged`; if that backup fails, a second confirmation asks before going on without one;
+  - **storage unavailable** (blocked site data, private modes that throw): the game runs unsaved and says so in the HUD and the world dialog.
+- **Replacing a world** (new seed or import) always passes the **confirmation dialog**: it names what will be erased (seed, hexes mapped, places, insight, upgrade levels, expedition), says it cannot be undone, and offers Export save first. Keep my world (focused; Escape or backdrop too) changes nothing. "World & save" on the sanctuary screen opens the same dialog between expeditions.
+- **Export/import:** Export downloads the save as pretty-printed JSON (`everwake-<seed>-day-<n>.json`). Import reads a chosen file (at most 5 MB), validates it with the same `parseSave`, shows what it holds in the confirmation, then puts it in play and saves it. A bad file is refused with its reason and changes nothing.
+- **Tests:** `tests/persistence.test.js` covers:
+  - round trips (fresh, mid-expedition then played on in lockstep, between expeditions with Cartographer bought, after a defeat);
+  - a regenerated baseline (fresh world: same terrain, nodes, places, spawns, sanctuary);
+  - depleted, used, mapped and journal state; player, pack, enemies (hex index) and log;
+  - restored sight without new mapping;
+  - each validation refusal; a fuzz pass (never throws, never mutates input);
+  - the slot (empty, saved, damaged left untouched and set aside, blocked and full storage, writes that do not stick);
+  - export; and the text.
+  The browser check's "saving and loading" flow (two viewports) covers:
+  - autosave per turn; the start screen with Continue and Escape;
+  - New world with Keep my world, then confirmed; a link to another world;
+  - reloading between expeditions; World & save over the sanctuary;
+  - Export (the downloaded file parses); Import of a bad file, then a good one with its confirmation;
+  - a damaged save: recovery screen, Escape, untouched, Download, Try again, New world with the backup kept.
+  `load()` in the check clears site storage first unless `keepSave` is set, so the other flows still start from fresh worlds.
+- **Deferred:** several save slots; noticing when another tab writes the same save (the last writer wins); IndexedDB; compressing the save.
+
 ## Testing
 - Unit tests for hex geometry, coordinate conversions, distance, neighbors, deterministic generation, and pathfinding.
 - Integration/manual checks for movement, action turn costs, fog updates, encounter interruption, death return, and persistence across reload.
@@ -454,6 +495,7 @@ Actions should be explicit and validated. Suggested pipeline: validate action �
 - 2026-11-27 (Task 07): Resource nodes are part of the generated world definition, placed per coordinate from hashes and terrain suitability. Gathering only ever records changes in a separate persistent layer (gathers taken per hex), so the baseline is reproducible and saves stay small. Nodes are gathered from their hex or any neighbour, so nodes on impassable terrain are usable from beside them; tapping a far one routes next to it, and "blocked" means no mapped approach exists. The UI offers one Gather button per valid option rather than a target-picking mode, which keeps it to one tap on touch. Nodes do not regrow (deferred).
 - 2026-11-27 (Task 08): Points of interest are part of the world definition, placed per cell from hashes and local terrain, with spacing rules that read only nearby cells, so placement is order-independent. What a POI yields is also seeded; only uses taken are stored, as persistent world changes. A POI counts as discovered once its hex is mapped (no second flag). Sighting one interrupts travel, because discovery is the kind of meaningful event the design says should stop movement. Every interaction is one `interact` action costing one turn from the POI's hex or a neighbour, the same reach as gathering. Shrines give knowledge (they map the land around them) rather than items. The journal is a separate, uncapped, persistent record of discovery and interaction events, distinct from the capped turn log.
 - 2026-11-27 (Task 09): Enemy homes are part of the world definition (seeded per cell, plus ruin guards). Where enemies are and what they are doing is live state in `game.enemies`, changed only by the enemy reaction in the turn pipeline, so nothing moves while idle. The AI is a three-mode state machine (idle, hunting, returning) with derived intent, a fixed order and no randomness, so it is easy to debug. Detection range never exceeds the player's sight, so being noticed is always visible and nothing leaks through fog. Enemies occupy hexes and route with the same A* and walkability as the player. The sanctuary and its neighbours are safe ground. Attacks are a handoff (`attack(game, enemy, { charge })`): until Task 10 the stub reports them and deals no damage, and the readout says so.
+- 2026-11-27 (Task 13): One autosaved world in localStorage (the save is a few KB, so IndexedDB is unnecessary). The world is regenerated from its seed, and the save pins the generator versions and sanctuary so it is never applied to a different baseline. Every part of the game object is saved, including an expedition under way, so a reload resumes mid-expedition rather than sending the player home. Visibility is restored without observing, so loading changes nothing. A save that fails validation is never overwritten or deleted: autosave is held behind a recovery screen until the player chooses, and replacing it keeps a backup copy. Replacing a world (new seed or import) always needs a separate confirmation that names what is lost. A link's seed no longer overrides a saved world; it is offered as a new world instead.
 - 2026-11-27 (Task 12): An expedition ends by an explicit one-turn Return on sanctuary ground, or by defeat. Both go through the pipeline, which keeps the tally from turn events, so the report cannot disagree with what happened. Returning keeps the whole pack for the next expedition (topped up with the kit's basics). Defeat loses everything carried and worn, and the next expedition starts with the basic kit. That is the risk/return trade-off: insight is earned the same either way, from discovery more than kills. All four upgrades are implemented. Their effects are derived from the levels owned, and they apply from the next expedition. Pathfinder is interpreted as stealth (enemies notice you from closer), because movement already costs one turn per hex and terrain cost only shapes routes. Between expeditions living enemies go home healed; the fallen stay fallen, so the world changes, but loot cannot be farmed. The sanctuary is a modal screen between expeditions rather than a separate scene, and world time carries on.
 - 2026-11-27 (Task 11): Items are data, and one inventory object holds everything carried and worn, so gathering, finds, loot and the UI cannot drift apart. A worn item is held in its slot, not counted among the carried items, so the counts mean "spare". Using, equipping and unequipping are ordinary one-turn actions in the pipeline (enemies react), and every check is side-effect free, so a refusal costs nothing. Stats are derived (base plus gear), and the starting kit reproduces the Task 10 tuning. Enemy loot is seeded per enemy home, like chest contents. Carry capacity is deferred rather than shown as a number that does nothing.
 - 2026-11-27 (Task 10): Combat happens on the hex map inside the normal turn pipeline, with no separate combat mode or screen. Blows are deterministic (attack − defense, at least 1, adjusted by cover, Defend and charges) so a fight can be read and planned, and the Attack button shows the damage in advance. Walking away from an adjacent enemy gives it a parting strike; that is what makes Flee (a clean break that also costs the enemy its turn) worth having, since stepping away was otherwise always free. Defeat is handled minimally but for real: the player wakes at the sanctuary healed and hunters lose the trail; what a defeat costs (loot, report) is left to Task 12. Herbs and food heal, so the existing resources serve as consumables until Task 11. Boar defense went 2→1 and skeleton 3→2 so fights with base stats take 3–5 blows.

@@ -33,7 +33,7 @@ Task files are executed one at a time. Mark a task complete only after its accep
 ## Milestone 5 — Expedition progression
 - [x] Task 11: Inventory, equipment, consumables (2026-11-27)
 - [x] Task 12: Death, expedition summary, permanent upgrades, sanctuary return (2026-11-27)
-- [ ] Task 13: Persistence and save safety
+- [x] Task 13: Persistence and save safety (2026-11-27)
 **Exit criteria:** complete multiple expeditions in one persistent world and progress between them.
 
 ## Milestone 6 — Usability and deployment

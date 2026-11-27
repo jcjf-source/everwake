@@ -6,7 +6,8 @@
  * one turn counter. Attack and defense are not stored either: they are
  * derived by systems/combat.js `playerStats` from `PLAYER_BASE` plus what is
  * worn (systems/inventory.js `equipmentBonus`). This is expedition state: a new expedition
- * (systems/expedition.js) resets it. It is not saved yet (Task 13).
+ * (systems/expedition.js) resets it. Saved with the game (systems/persistence.js),
+ * so a reload resumes an expedition under way.
  */
 import { createInventory } from '../systems/inventory.js';
 

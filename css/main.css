@@ -607,3 +607,16 @@ html, body {
   .sanctuary-dialog .world-dialog__note { display: none; }
   .report-rows { grid-template-columns: max-content 1fr max-content 1fr; }
 }
+
+/* Saving and loading (Task 13). */
+.hud-status--warning { color: #f0b9a8; background: rgba(42, 22, 20, 0.85); border-color: var(--danger-edge); }
+.hud-button--danger { color: #fbe3da; background: #7a3426; border-color: var(--danger-edge); }
+.hud-button--danger:hover { color: #fff; background: #8f3f2f; border-color: #a85a48; }
+.world-dialog__actions--start { justify-content: flex-start; }
+#world-form .pack-heading { margin-top: 1.1rem; }
+.save-status { margin-bottom: 0.6rem; }
+.confirm-lines p { margin: 0 0 0.6rem; font-size: 0.88rem; overflow-wrap: anywhere; }
+.confirm-dialog h2 { color: #e6b3a3; }
+.recovery-dialog h2 { color: #e6b3a3; }
+.start-link { color: var(--parchment); }
+#world-dialog, .start-dialog, .recovery-dialog, .confirm-dialog { overflow-y: auto; overscroll-behavior: contain; }

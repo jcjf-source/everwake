@@ -5,7 +5,8 @@
  *   game.progress = { insight, upgrades: { id: level }, history: [report…] }
  *
  * *Player persistent state* (see "State model" in docs/TECHNICAL.md): it
- * survives death and every expedition; saving it is Task 13. `history` holds
+ * survives death and every expedition, and is saved with the game
+ * (systems/persistence.js). `history` holds
  * every finished expedition's report (systems/expedition.js), oldest first.
  *
  * Insight rewards discovery more than fighting: hexes newly mapped, places

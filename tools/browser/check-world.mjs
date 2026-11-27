@@ -114,9 +114,14 @@ async function clickEl(sel) {
   await frame();
 }
 
-async function load(url) {
+/**
+ * Open `url`. The saved world (Task 13) is cleared first, so every flow
+ * starts from a fresh world named by the URL, unless `keepSave` is set.
+ */
+async function load(url, { keepSave = false } = {}) {
   const seed = new URL(url).searchParams.get('seed');
-  if (seed) resetMemory(createWorld(seed, R));
+  if (seed && !keepSave) resetMemory(createWorld(seed, R));
+  if (!keepSave) await s.send('Storage.clearDataForOrigin', { origin: new URL(s.appUrl).origin, storageTypes: 'local_storage' });
   await s.send('Page.navigate', { url });
   for (let i = 0; i < 50; i++) {
     await s.wait(100);
@@ -1331,6 +1336,203 @@ async function perf(label, w, h, isTouch) {
   console.log(`  perf ${label}: script ${m.script.toFixed(2)} ms/frame, task ${m.task.toFixed(2)} ms/frame`);
 }
 
+// ---------------------------------------------------------------- saving and loading (Task 13)
+const { parseSave, gameSummary } = await imp('src/systems/persistence.js');
+const { exportText, exportFileName, SAVE_KEY, DAMAGED_KEY } = await imp('src/systems/saveSlot.js');
+const SV = await imp('src/ui/saveText.js');
+const isOpen = (id) => ev(`document.getElementById('${id}').open`);
+const stored = (k) => ev(`localStorage.getItem(${JSON.stringify(k)})`);
+const savedGame = async () => { const r = parseSave(await stored(SAVE_KEY), { radius: R }); return r.ok ? r.game : null; };
+const lines = (sel) => ev(`[...document.querySelectorAll(${JSON.stringify(sel)})].map((p) => p.textContent)`);
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+async function pressEscape() {
+  await s.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+  await s.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+  await frame();
+}
+async function until(fn, ms = 5000) {
+  const end = Date.now() + ms;
+  while (Date.now() < end) { if (await fn()) return true; await s.wait(50); }
+  return false;
+}
+async function typeSeed(seed) {
+  await ev(`(() => { const i = document.getElementById('seed-input'); i.value = ${JSON.stringify(seed)}; i.dispatchEvent(new Event('input')); })()`);
+  await clickEl('#seed-create');
+}
+/** Choose `path` in the page's (intercepted) file chooser after clicking `button`. */
+async function importFile(button, path) {
+  await clickEl(button);
+  const doc = await s.send('DOM.getDocument');
+  const q = await s.send('DOM.querySelector', { nodeId: doc.result.root.nodeId, selector: '#import-file' });
+  await s.send('DOM.setFileInputFiles', { files: [path], nodeId: q.result.nodeId });
+}
+
+/**
+ * Saving and loading: autosave per turn, the start screen (Continue,
+ * Escape, New world with its confirmation, a link to another world), a
+ * reload between expeditions, export and import (bad file, confirm), and a
+ * damaged save (recovery screen, never overwritten, Try again, New world
+ * keeping a backup). Expected text comes from the saved JSON, restored in
+ * Node with the same modules.
+ */
+async function verifyPersistence(name, w, h, mobile) {
+  const { mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const dir = mkdtempSync(join(tmpdir(), 'everwake-saves-'));
+  await s.send('Page.setDownloadBehavior', { behavior: 'allow', downloadPath: dir });
+  await s.send('Page.setInterceptFileChooserDialog', { enabled: true });
+  try {
+    const world = createWorld('everwake', R);
+    await load(`${s.appUrl}?seed=everwake`);
+    let g = await savedGame();
+    check(g?.world.seed === 'everwake' && g.clock.turn === 0, 'a new world is saved at once');
+    check(!(await isOpen('start-dialog')), 'no start screen without a save');
+
+    // A step and a Wait: each turn is saved.
+    const view = C.cameraToView(initialCamera(world, w, h), w, h);
+    const n = hexNeighbors(world.sanctuary).find((x) => world.isWalkable(x) && quiet(world, x));
+    const p = hexToScreen(view, n);
+    await tap(p.x, p.y, mobile);
+    await clickEl('#wait-button');
+    g = await savedGame();
+    check(g?.clock.turn === 2 && hexEquals(g.player.position, n), `every turn is saved (turn ${g?.clock.turn})`);
+    const t2 = timeOf(2);
+    await clickEl('#seed-button');
+    check((await text('save-status')) === SV.describeSaveStatus({ state: 'saved', turn: 2, day: t2.day, part: t2.part }), `save status: "${await text('save-status')}"`);
+    await clickEl('#seed-cancel');
+    check((await text('save-warning')) === '', 'no save warning while saving works');
+    const saved = await stored(SAVE_KEY);
+
+    // Reload: the start screen, then Continue.
+    await load(`${s.appUrl}?seed=everwake`, { keepSave: true });
+    const sum = gameSummary(g);
+    check(await isOpen('start-dialog'), 'reload opens the start screen');
+    check((await text('start-summary')) === SV.describeSummary(sum), `start summary: "${await text('start-summary')}"`);
+    check((await text('start-detail')).startsWith(SV.describeProgress(sum)), `start detail: "${await text('start-detail')}"`);
+    check(await ev(`document.getElementById('start-link').hidden`), 'no link note for the saved world');
+    check((await ev('document.activeElement.id')) === 'start-continue', 'Continue has focus');
+    const fit = await ev(`(() => { const r = document.querySelector('#start-dialog').getBoundingClientRect(); const bs = [...document.querySelectorAll('#start-dialog button')].map((b) => b.getBoundingClientRect()); return r.right <= innerWidth && r.bottom <= innerHeight && bs.every((b) => b.height >= 44 && b.right <= r.right + 0.5); })()`);
+    check(fit, 'start screen fits, buttons touch-sized');
+    await shot(`${name}-start`);
+    await clickEl('#start-continue');
+    let st = await playerState();
+    check(!(await isOpen('start-dialog')) && st.turn === 2 && hexEquals(st.pos, n), `Continue restores the turn and position (${JSON.stringify(st)})`);
+    check((await readout()) === SV.describeContinued(sum), `readout: "${await readout()}"`);
+    check((await stored(SAVE_KEY)) === saved, 'loading does not rewrite the save');
+
+    await load(`${s.appUrl}?seed=everwake`, { keepSave: true });
+    await pressEscape();
+    st = await playerState();
+    check(!(await isOpen('start-dialog')) && st.turn === 2, 'Escape continues too');
+
+    // New world from the start screen: confirmation; Keep my world changes nothing.
+    await load(`${s.appUrl}?seed=everwake`, { keepSave: true });
+    await clickEl('#start-new');
+    check(await dialogOpen(), 'New world opens the seed dialog');
+    await typeSeed('other-1');
+    check(await isOpen('confirm-dialog'), 'a new world asks for confirmation');
+    const want = SV.confirmReplace({ current: sum, seed: 'other-1' });
+    check((await text('confirm-title')) === want.title && same(await lines('#confirm-lines p'), want.lines), `confirmation text: ${JSON.stringify(await lines('#confirm-lines p'))}`);
+    check((await ev('document.activeElement.id')) === 'confirm-cancel' && (await text('confirm-cancel')) === 'Keep my world', 'the safe choice has focus');
+    check(!(await ev(`document.getElementById('confirm-export').hidden`)), 'Export save first is offered');
+    await shot(`${name}-confirm-replace`);
+    await clickEl('#confirm-cancel');
+    st = await playerState();
+    check(!(await isOpen('confirm-dialog')) && (await text('seed-text')) === 'everwake' && st.turn === 2 && (await stored(SAVE_KEY)) === saved, 'Keep my world changes nothing');
+    await clickEl('#seed-button');
+    await typeSeed('other-1');
+    await clickEl('#confirm-ok');
+    g = await savedGame();
+    check((await text('seed-text')) === 'other-1' && (await playerState()).turn === 0 && g?.world.seed === 'other-1', 'confirming replaces the world and saves it');
+
+    // A link to another world: offered, not obeyed.
+    await load(`${s.appUrl}?seed=everwake`, { keepSave: true });
+    check((await text('seed-text')) === 'other-1', 'the saved world wins over the link');
+    check(!(await ev(`document.getElementById('start-link').hidden`)) && (await text('start-link')) === SV.linkNote('everwake'), `link note: "${await text('start-link')}"`);
+    await clickEl('#start-new');
+    check((await ev(`document.getElementById('seed-input').value`)) === 'everwake', 'New world offers the linked seed');
+    await clickEl('#seed-cancel');
+    check(new URLSearchParams(await ev('location.search')).get('seed') === 'other-1', 'the URL names the saved world');
+
+    // Between expeditions: Return, reload, and the sanctuary screen is back.
+    await clickEl('#wait-button');
+    await clickEl('#context-actions .hud-button--return');
+    check(await isOpen('sanctuary-dialog'), 'Return opens the sanctuary screen');
+    g = await savedGame();
+    check(g?.expedition.status === 'ended', 'the ended expedition is saved');
+    await load(`${s.appUrl}`, { keepSave: true });
+    check((await text('start-summary')) === SV.describeSummary(gameSummary(g)), 'start screen says the expedition is over');
+    await clickEl('#start-continue');
+    check(await isOpen('sanctuary-dialog') && (await text('report-title')) === X.reportTitle(lastReport(g)), 'Continue reopens the sanctuary screen with the report');
+    await clickEl('#sanctuary-world');
+    check(await dialogOpen(), 'World & save opens over the sanctuary');
+    const tg = timeOf(g.clock.turn);
+    check((await text('save-status')) === SV.describeSaveStatus({ state: 'saved', turn: g.clock.turn, day: tg.day, part: tg.part }), `save status after loading: "${await text('save-status')}"`);
+    await shot(`${name}-world-save`);
+
+    // Export.
+    await clickEl('#save-export');
+    const file = join(dir, exportFileName(g, timeOf(g.clock.turn).day));
+    check(await until(() => existsSync(file)), `Export downloads ${file}`);
+    const exported = existsSync(file) ? parseSave(readFileSync(file, 'utf8'), { radius: R }) : { ok: false };
+    check(exported.ok && exported.game.world.seed === 'other-1' && exported.game.expedition.status === 'ended', 'the exported file is the save');
+    check((await text('save-message')).startsWith('Save exported as'), `export message: "${await text('save-message')}"`);
+
+    // Import: a bad file is refused; a good one asks first, then loads.
+    const bad = join(dir, 'bad.json');
+    writeFileSync(bad, '{"hello": "world"}');
+    await importFile('#save-import', bad);
+    const badMsg = SV.describeImportError(parseSave('{"hello": "world"}', { radius: R }).error);
+    check(await until(async () => (await text('save-message')) === badMsg), `bad import refused: "${await text('save-message')}"`);
+    check((await text('seed-text')) === 'other-1', 'a bad import changes nothing');
+    const ng = createGame(createWorld('everwake', R));
+    const nt = createTurnSystem({ reactions: createCombatReactions() });
+    for (let i = 0; i < 3; i++) nt.perform(ng, { type: 'wait' });
+    const good = join(dir, 'good.json');
+    writeFileSync(good, exportText(ng));
+    await importFile('#save-import', good);
+    check(await until(() => isOpen('confirm-dialog')), 'a good import asks for confirmation');
+    const wantImport = SV.confirmImport({ current: gameSummary(await savedGame()), incoming: gameSummary(ng) });
+    check(same(await lines('#confirm-lines p'), wantImport.lines), `import confirmation: ${JSON.stringify(await lines('#confirm-lines p'))}`);
+    await clickEl('#confirm-ok');
+    st = await playerState();
+    g = await savedGame();
+    check((await text('seed-text')) === 'everwake' && st.turn === 3 && !(await isOpen('sanctuary-dialog')) && !(await dialogOpen()), 'the imported save is in play');
+    check((await readout()) === SV.describeImported(gameSummary(ng)) && g?.clock.turn === 3, 'and saved');
+
+    // A damaged save: the recovery screen, and it is never overwritten.
+    const broken = '{"format":"everwake-save","version":1,"world":';
+    await ev(`localStorage.setItem(${JSON.stringify(SAVE_KEY)}, ${JSON.stringify(broken)})`);
+    await load(`${s.appUrl}`, { keepSave: true });
+    check(await isOpen('recovery-dialog') && !(await isOpen('start-dialog')), 'a damaged save opens the recovery screen');
+    check((await text('recovery-reason')) === SV.recoveryReason(parseSave(broken, { radius: R }).error), `reason: "${await text('recovery-reason')}"`);
+    await shot(`${name}-recovery`);
+    await pressEscape();
+    check(await isOpen('recovery-dialog'), 'Escape does not dismiss it');
+    check((await stored(SAVE_KEY)) === broken, 'the damaged save is left as it is');
+    await clickEl('#recovery-download');
+    const dl = join(dir, 'everwake-damaged-save.json');
+    check(await until(() => existsSync(dl)) && readFileSync(dl, 'utf8') === broken, 'Download damaged save gives the raw text');
+    await clickEl('#recovery-retry');
+    await s.wait(300);
+    check(await until(() => ev(`!!document.getElementById('recovery-dialog')?.open`)), 'Try again reloads and still refuses it');
+    check((await stored(SAVE_KEY)) === broken, 'still not overwritten');
+    await clickEl('#recovery-new');
+    check(await dialogOpen(), 'New world opens the seed dialog over the recovery screen');
+    await typeSeed('fresh-2');
+    const wantDamaged = SV.confirmReplace({ current: null, damaged: true, seed: 'fresh-2' });
+    check(await isOpen('confirm-dialog') && same(await lines('#confirm-lines p'), wantDamaged.lines), 'confirmation says the damaged save is kept');
+    check(await ev(`document.getElementById('confirm-export').hidden`), 'no export offered for a damaged save');
+    await clickEl('#confirm-ok');
+    g = await savedGame();
+    check(!(await isOpen('recovery-dialog')) && (await text('seed-text')) === 'fresh-2' && g?.world.seed === 'fresh-2', 'a new world replaces it');
+    check((await stored(DAMAGED_KEY)) === broken, 'the damaged save is kept as a backup');
+  } finally {
+    await s.send('Page.setInterceptFileChooserDialog', { enabled: false });
+    try { rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
+}
+
 try {
   for (const cfg of VIEWPORTS.filter((v) => !process.env.VIEWPORT || v.name.includes(process.env.VIEWPORT))) {
     const { w, h, mobile } = cfg;
@@ -1420,6 +1622,10 @@ try {
       await s.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' });
       await s.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
       await frame();
+      check(await isOpen('confirm-dialog'), 'Replace world asks for confirmation first');
+      check((await text('seed-text')) === 'everwake', 'nothing is replaced before confirming');
+      await shot(`${cfg.name}-confirm`);
+      await clickEl('#confirm-ok');
       const search = await ev('location.search');
       check((await text('seed-text')) === 'mossy fen 12' && !(await dialogOpen()), 'Enter creates the world; seed normalised');
       check(new URLSearchParams(search).get('seed') === 'mossy fen 12', `URL keeps the seed: ${search}`);
@@ -1457,6 +1663,9 @@ try {
       check((await ev(`document.getElementById('coords-toggle').getAttribute('aria-pressed')`)) === 'true', 'Coords toggles on');
       await shot(`${cfg.name}-coords`);
       await clickEl('#coords-toggle');
+
+      console.log('  -- saving and loading');
+      await verifyPersistence(cfg.name, w, h, mobile);
     }
 
     const errs = logs.filter((l) => /EXC|error|warn/i.test(l));

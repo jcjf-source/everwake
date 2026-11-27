@@ -10,7 +10,8 @@
  * hour: 12 turns per part, 48 per day.
  *
  * Simulation only (no DOM). Clock state is expedition-independent world
- * time; it is saved with the game in Task 13 via serializeClock/restoreClock.
+ * time; it is saved with the game (systems/persistence.js) via
+ * serializeClock/restoreClock.
  */
 
 export const DAY_PARTS = Object.freeze(['morning', 'afternoon', 'evening', 'night']);
