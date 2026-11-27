@@ -5,6 +5,47 @@ This file records notable project changes. It begins as a documentation scaffold
 
 ## Unreleased
 
+### Task 12: Expeditions, the sanctuary and permanent upgrades
+- **Expeditions:** the game starts on expedition 1. An expedition ends in one of two ways:
+  - **Return:** a **Return** button appears on sanctuary ground (the sanctuary and its six neighbours) once you have set off. It takes one turn and ends the expedition. You keep everything you carry and wear.
+  - **Defeat:** at 0 health you wake at the sanctuary and everything you carried and wore is lost.
+- **Expedition report:** the sanctuary screen opens with the report:
+  - steps and the farthest point reached;
+  - turns and the time of day at the start and end;
+  - hexes mapped;
+  - places discovered and explored;
+  - what you gathered and found;
+  - enemies defeated, by kind;
+  - how it ended, and what you kept or lost.
+- **Insight**, earned from exploring and the same for either ending: 1 per 5 hexes mapped, 5 per place discovered, 2 per place explored, 3 per enemy defeated.
+- **Upgrades** are learned at the sanctuary with insight and last for good, from your next expedition:
+  - **Survivor:** +4 maximum health per level (3 levels).
+  - **Cartographer:** +1 sight radius per level (2 levels).
+  - **Pathfinder:** enemies notice you 1 hex closer per level, never less than 1 (2 levels).
+  - **Scavenger:** +1 from every gather per level (2 levels).
+  Each shows its effect now and next, and a Learn button that is disabled with the reason when it can't be bought.
+- **Set out · expedition N** starts the next expedition. No turn passes; the world clock carries on.
+  - You start at the sanctuary at full health.
+  - After a return, you carry your kept pack, topped up to the starting rations and potion, with the knife and jerkin worn if a slot is empty.
+  - After a defeat, you start with the basic kit.
+  - Enemies still alive go home healed and unaware. Enemies you defeated stay gone.
+- **What survives:** the world and its seed, your map, the journal, spent nodes and used places, insight and upgrades all carry over.
+- The sanctuary screen replaces the Task 10 defeat notice. Escape does not close it; Set out does. Between expeditions every action is refused (no turn passes).
+- Tests:
+  - upgrade data, insight and its formula;
+  - returning (refusals at no cost, report, pack kept, insight);
+  - setting out (pack kept and resupplied; nothing else reset; one expedition at a time);
+  - defeat (pack lost; map, journal and world changes kept; basic kit);
+  - enemy reset, with the fallen staying fallen;
+  - the tally of places, uses and finds;
+  - buying upgrades (refusals, maximum);
+  - each of the four upgrade effects;
+  - the Return button, and the text.
+  255 tests in total.
+- **Browser check:**
+  - The defeat flow now checks the sanctuary screen against a Node mirror: report rows, insight, upgrade buttons, fit on screen, touch-sized buttons, and that Escape doesn't dismiss it. It then sets out with the basic kit and checks that survivors are home and the fallen stay fallen.
+  - A new flow on all four viewports walks 12 hexes out on a quiet route and back, presses Return, checks the report, learns Survivor, and sets out with 28 health and the kept pack.
+
 ### Task 11: Inventory, equipment and consumables
 - **One inventory for everything.** Gathering, POI finds, enemy loot, consumables, equipment and the UI all read and write the same `player.inventory` (`{ items, equipped }`). Items are defined in `src/data/items.js`, which replaces `src/data/consumables.js`.
 - **Items:** wood and stone (materials); herbs (+5), food (+3, gathered), rations (+4, packed at the sanctuary) and the healing potion (+12) are consumables; the hunting knife (+2 attack) and short sword (+3) are weapons; the padded jerkin (+1 defense) and ring mail (+2) are armor.

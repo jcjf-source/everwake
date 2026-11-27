@@ -5,8 +5,8 @@
  * Elapsed time is not kept here: the world clock (src/core/clock.js) is the
  * one turn counter. Attack and defense are not stored either: they are
  * derived by systems/combat.js `playerStats` from `PLAYER_BASE` plus what is
- * worn (systems/inventory.js `equipmentBonus`). This is expedition state; it
- * is not saved yet (persistence is Task 13).
+ * worn (systems/inventory.js `equipmentBonus`). This is expedition state: a new expedition
+ * (systems/expedition.js) resets it. It is not saved yet (Task 13).
  */
 import { createInventory } from '../systems/inventory.js';
 
@@ -22,12 +22,18 @@ export const STARTING_KIT = Object.freeze({
   items: Object.freeze({ rations: 2, healingPotion: 1 }),
 });
 
-/** @param {{ q: number, r: number }} position usually the sanctuary */
-export function createPlayer(position) {
+/**
+ * A player setting out from `position` (usually the sanctuary) at full
+ * health. `maxHealth` includes the Survivor upgrade (systems/expedition.js
+ * passes it); `inventory` is what they carry, the starting kit by default.
+ * @param {{ q: number, r: number }} position
+ * @param {{ maxHealth?: number, inventory?: object }} [opts]
+ */
+export function createPlayer(position, { maxHealth = PLAYER_BASE.maxHealth, inventory = createInventory(STARTING_KIT) } = {}) {
   return {
     position: { q: position.q, r: position.r },
-    health: PLAYER_BASE.maxHealth,
-    maxHealth: PLAYER_BASE.maxHealth,
-    inventory: createInventory(STARTING_KIT),
+    health: maxHealth,
+    maxHealth,
+    inventory,
   };
 }

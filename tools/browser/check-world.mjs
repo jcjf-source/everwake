@@ -10,8 +10,9 @@
  * dialog), enemies and combat (being noticed interrupts travel, approach,
  * real blows and the health line, inspecting, no movement while idle, the
  * combat buttons, Defend, Flee, disengaging at the sanctuary and recovering
- * there, fighting an enemy until it falls, being defeated and the defeat
- * notice), the seed dialog, URL seed retention, Centre, Coords, console cleanliness, and
+ * there, fighting an enemy until it falls, being defeated), expeditions
+ * (a voluntary return, the report after a return and after a defeat, learning
+ * an upgrade, setting out again with the pack kept or lost), the seed dialog, URL seed retention, Centre, Coords, console cleanliness, and
  * drag frame times.
  *
  * Usage: node tools/browser/check-world.mjs [screenshotDir]
@@ -65,6 +66,10 @@ const { enemyIntent } = await imp('src/systems/enemies.js');
 const { createCombatReactions } = await imp('src/systems/combat.js');
 const CT = await imp('src/ui/combatText.js');
 const { contextOptions, buttonFor, actionFor } = await imp('src/ui/contextActions.js');
+const { setOut } = await imp('src/core/game.js');
+const { lastReport } = await imp('src/systems/expedition.js');
+const { buyUpgrade, upgradeView } = await imp('src/systems/progression.js');
+const X = await imp('src/ui/expeditionText.js');
 /**
  * Enemies (Task 09). The general flows keep every hex the player stands on
  * out of every enemy's detection range (`quietPath`), so enemies stay idle
@@ -783,7 +788,8 @@ async function verifyPois(world, w, h, isTouch) {
  * (no parting strike); walk back to the sanctuary (it follows and gives up
  * at the ward) and recover there; go back out and fight it with the Attack
  * button until it falls; then wait beside the next enemy until you are
- * defeated (the defeat notice opens and you wake at the sanctuary, healed).
+ * defeated (the sanctuary screen opens with the report; learn an upgrade if
+ * affordable, then set out again with the basic kit).
  * Every turn is mirrored by a Node game run through the real pipeline, so
  * each readout, the health line and the buttons are compared exactly.
  */
@@ -1017,14 +1023,128 @@ async function verifyEnemies(world, w, h, isTouch) {
   }
   check(!!fell, `defeated at turn ${mg.clock.turn}: "${await readout()}"`);
   if (!fell) return;
-  const dialog = await ev(`({ open: document.getElementById('defeat-dialog').open, text: document.getElementById('defeat-text').textContent })`);
-  check(dialog.open && dialog.text === CT.describeDefeat(fell), `the defeat notice opens: "${dialog.text}"`);
-  check(hexEquals(mg.player.position, world.sanctuary) && (await synced('after defeat')), `you wake at the sanctuary, healed: ${await text('player-status')} · ${await text('health-status')}`);
+  check(hexEquals(mg.player.position, world.sanctuary) && (await synced('after defeat')), `you wake at the sanctuary: ${await text('player-status')} · ${await text('health-status')}`);
+  check(lastReport(mg)?.outcome === 'defeated' && (await text('inventory-status')) === G.describeInventory(mg.player.inventory), `the pack is lost: "${await text('inventory-status')}"`);
   await shot(`defeat-${w}x${h}`);
-  await clickEl('#defeat-close');
-  check(!(await ev(`document.getElementById('defeat-dialog').open`)), 'the notice closes');
-  check(mg.enemies.list.every((e) => e.health <= 0 || e.mode !== 'hunting'), 'nothing is hunting you after the defeat');
-  await waitTurn('wait after defeat');
+  if (!(await verifySanctuary(mg, `defeat-${w}x${h}`))) return;
+  check(JSON.stringify(mg.player.inventory) === JSON.stringify(createInventory(STARTING_KIT)), 'after a defeat you set out with the basic kit');
+  check(mg.enemies.list.every((e) => e.health <= 0 || (e.mode === 'idle' && hexEquals(e.position, e.home))), 'survivors are home and unaware; the fallen stay fallen');
+  check(attacker.health === 0 && !mg.enemies.at(attacker.home), `the ${attacker.type} you defeated is still gone`);
+  await waitTurn('wait on the next expedition');
+}
+
+/**
+ * The sanctuary screen once an expedition has ended (mirror `mg` already
+ * finished): the report matches the mirror's, it fits the screen, Escape
+ * does not dismiss it, the cheapest affordable upgrade (if any) is learned,
+ * and Set out starts the next expedition (no turn passes).
+ */
+async function verifySanctuary(mg, label) {
+  const rep = lastReport(mg);
+  const read = () => ev(`(() => {
+    const d = document.getElementById('sanctuary-dialog'); const r = d.getBoundingClientRect();
+    const t = (id) => document.getElementById(id).textContent;
+    return { open: d.open, title: t('report-title'), summary: t('report-summary'), insight: t('report-insight'), balance: t('sanctuary-balance'),
+      rows: [...document.querySelectorAll('#report-rows dd')].map(e => e.textContent),
+      buttons: [...document.querySelectorAll('#upgrade-list button')].map(b => ({ id: b.dataset.upgrade, text: b.textContent, disabled: b.disabled })),
+      setOut: t('set-out'), message: t('sanctuary-message'),
+      inside: r.left >= 0 && r.top >= 0 && r.right <= innerWidth && r.bottom <= innerHeight,
+      sw: document.scrollingElement.scrollWidth <= innerWidth, dw: d.scrollWidth <= d.clientWidth,
+      touch: [...d.querySelectorAll('button')].every(b => b.getBoundingClientRect().height >= 44) };
+  })()`);
+  const wantButtons = () => upgradeView(mg).map((u) => ({ id: u.id, text: X.upgradeRow(u).button, disabled: !u.check.ok }));
+  let got = await read();
+  check(got.open && got.title === X.reportTitle(rep) && got.summary === X.reportSummary(rep), `${label}: the sanctuary screen opens: "${got.title}" · "${got.summary}"`);
+  const rowsWant = X.reportRows(rep).map((r) => r.value);
+  check(JSON.stringify(got.rows) === JSON.stringify(rowsWant), `${label}: report rows ${JSON.stringify(got.rows)}${JSON.stringify(got.rows) === JSON.stringify(rowsWant) ? '' : ` want ${JSON.stringify(rowsWant)}`}`);
+  check(got.insight === X.describeInsight(rep.insight) && got.balance === X.describeBalance(mg.progress.insight), `${label}: "${got.insight}" · "${got.balance}"`);
+  check(JSON.stringify(got.buttons) === JSON.stringify(wantButtons()) && got.setOut === X.setOutText(mg.expedition.number + 1), `${label}: upgrade buttons ${JSON.stringify(got.buttons.map((b) => b.text + (b.disabled ? ' (off)' : '')))} · "${got.setOut}"`);
+  check(got.inside && got.sw && got.dw && got.touch, `${label}: fits the screen, touch-sized buttons ${JSON.stringify({ inside: got.inside, sw: got.sw, dw: got.dw, touch: got.touch })}`);
+  await s.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+  await s.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+  check((await read()).open, `${label}: Escape does not dismiss it (Set out is the way back)`);
+  const afford = upgradeView(mg).filter((u) => u.check.ok).sort((a, b) => a.cost - b.cost)[0];
+  if (afford) {
+    await clickEl(`#upgrade-list button[data-upgrade="${afford.id}"]`);
+    const b = buyUpgrade(mg, afford.id);
+    got = await read();
+    check(b.ok && got.message === X.describeUpgraded(b.event) && got.balance === X.describeBalance(mg.progress.insight)
+      && JSON.stringify(got.buttons) === JSON.stringify(wantButtons()), `${label}: learned ${afford.id}: "${got.message}"`);
+    const stillOn = upgradeView(mg).find((u) => u.id === afford.id).check.ok;
+    const focused = await ev(`document.activeElement?.dataset?.upgrade ?? document.activeElement?.id`);
+    check(focused === (stillOn ? afford.id : 'set-out'), `${label}: focus stays on its button, or moves to Set out once it is disabled (${focused})`);
+  } else {
+    console.log(`  (no upgrade affordable with ${mg.progress.insight} insight)`);
+  }
+  await shot(`sanctuary-${label}`);
+  const turn = mg.clock.turn;
+  await clickEl('#set-out');
+  const so = setOut(mg);
+  const st = await playerState();
+  check(so.ok && !(await ev(`document.getElementById('sanctuary-dialog').open`)), `${label}: Set out closes the screen`);
+  check((await readout()) === K.describeEvents(so.events), `${label}: "${await readout()}"`);
+  check(st && hexEquals(st.pos, mg.player.position) && st.turn === turn
+    && (await text('health-status')) === CT.describeHealth(mg.player.health, mg.player.maxHealth)
+    && (await text('inventory-status')) === G.describeInventory(mg.player.inventory),
+  `${label}: expedition ${mg.expedition.number} starts at the sanctuary, no turn taken: ${await text('health-status')} · ${await text('inventory-status')}`);
+  return so.ok;
+}
+
+/**
+ * A voluntary return: walk out along a quiet route (one that wakes no enemy)
+ * far enough to earn an upgrade, and back onto sanctuary ground, where
+ * Return appears; it ends expedition 1 (one turn) and the report keeps the
+ * pack, which the next expedition sets out with.
+ */
+async function verifyReturn(world, w, h, isTouch) {
+  await load(`${s.appUrl}?seed=${world.seed}`);
+  let cam = initialCamera(world, w, h);
+  const tapHex = async (hh) => { const p = hexToScreen(C.cameraToView(cam, w, h), hh); await tap(p.x, p.y, isTouch); };
+  const mg = createGame(world);
+  const turns = createTurnSystem({ reactions: createCombatReactions() });
+  const home = world.sanctuary;
+  /** One step by tapping a neighbour, recentred first so it is clear of the HUD. */
+  const step = async (to) => {
+    await clickEl('#recenter');
+    cam = C.centerOnHex(cam, mg.player.position);
+    await tapHex(to);
+    const res = turns.perform(mg, { type: 'move', to });
+    const st = await playerState();
+    if (!res.ok || !st || !hexEquals(st.pos, to)) { fail(`step to ${hexKey(to)}: page at ${st ? hexKey(st.pos) : '?'} (${res.reason ?? 'ok'})`); return false; }
+    return true;
+  };
+  // The longest quiet route out (up to 12 hexes), as far as POIs allow.
+  const out = hexesInRange(home, 12)
+    .filter((x) => hexDistance(x, home) >= 8 && world.has(x) && world.isWalkable(x))
+    .map((x) => planRoute(world, home, x))
+    .filter((r) => r.status === 'ok' && r.path.length <= 14 && quietPath(world, r.path))
+    .sort((a, b) => hexDistance(b.path.at(-1), home) - hexDistance(a.path.at(-1), home) || a.path.length - b.path.length)[0];
+  if (!out) { fail('no quiet route out of the sanctuary'); return; }
+  const returnShown = async () => (await ev(`[...document.querySelectorAll('#context-actions button')].map(b => b.textContent)`)).some((t) => t.startsWith('Return'));
+  check(!(await returnShown()), 'no Return button before setting off');
+  for (const to of out.path) if (!(await step(to))) return;
+  check(!(await returnShown()), `no Return button off sanctuary ground (${out.path.length} hexes out)`);
+  const back = [...out.path].reverse().slice(1);
+  for (const to of back) {
+    if (!(await step(to))) return;
+    if (hexDistance(to, home) === 1) break;
+  }
+  const options = contextOptions(mg);
+  const i = options.findIndex((o) => o.kind === 'return');
+  const labels = await ev(`[...document.querySelectorAll('#context-actions button')].map(b => b.getAttribute('aria-label'))`);
+  check(i >= 0 && JSON.stringify(labels) === JSON.stringify(options.map((o) => buttonFor(o).label)), `back on sanctuary ground, Return is offered: ${JSON.stringify(labels)}`);
+  if (i < 0) return;
+  await clickEl(`#context-actions button[data-index="${i}"]`);
+  const res = turns.perform(mg, actionFor(options[i]));
+  check(res.ok && res.ended?.outcome === 'returned' && (await readout()) === K.describeEvents(res.events), `Return ends the expedition (one turn): "${await readout()}"`);
+  const st = await playerState();
+  check(st && hexEquals(st.pos, home) && st.turn === mg.clock.turn, `you stand on the sanctuary at turn ${st?.turn}`);
+  const kept = JSON.stringify(mg.player.inventory);
+  if (!(await verifySanctuary(mg, `return-${w}x${h}`))) return;
+  check(JSON.stringify(mg.player.inventory) === kept, 'the pack you returned with is kept');
+  await clickEl('#wait-button');
+  const wres = turns.perform(mg, { type: 'wait' });
+  check(wres.ok && (await playerState()).turn === mg.clock.turn, `expedition 2 is under way: Wait takes a turn (turn ${mg.clock.turn})`);
 }
 
 /**
@@ -1262,6 +1382,9 @@ try {
 
     console.log('  -- pack (inventory and equipment)');
     await verifyPack(world, w, h, mobile);
+
+    console.log('  -- expeditions (return, report, upgrades, setting out)');
+    await verifyReturn(world, w, h, mobile);
 
     // Dialog and seed flows on one desktop and one phone viewport.
     if (cfg.name.startsWith('desktop-1280') || cfg.name.startsWith('phone-390')) {

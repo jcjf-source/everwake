@@ -144,15 +144,21 @@
     </form>
   </dialog>
 
-  <dialog id="defeat-dialog" class="world-dialog defeat-dialog" aria-labelledby="defeat-dialog-title">
-    <form class="world-dialog__form" method="dialog">
-      <h2 id="defeat-dialog-title">Defeated</h2>
-      <p id="defeat-text" class="world-dialog__current"></p>
-      <p class="world-dialog__note">Enemies that were hunting you have lost your trail.</p>
+  <dialog id="sanctuary-dialog" class="world-dialog sanctuary-dialog" aria-labelledby="report-title"
+          aria-describedby="report-summary">
+    <div class="world-dialog__form">
+      <h2 id="report-title"></h2>
+      <p id="report-summary" class="world-dialog__current"></p>
+      <dl id="report-rows" class="report-rows"></dl>
+      <p id="report-insight" class="report-insight"></p>
+      <h3 class="pack-heading">Sanctuary · <span id="sanctuary-balance"></span></h3>
+      <ul id="upgrade-list" class="pack-list upgrade-list" aria-label="Upgrades"></ul>
+      <p id="sanctuary-message" class="pack-message" aria-live="polite"></p>
+      <p class="world-dialog__note">Insight is earned by mapping land, finding and exploring places, and defeating enemies. Upgrades last for good and apply from your next expedition.</p>
       <div class="world-dialog__actions">
-        <button type="submit" id="defeat-close" class="hud-button hud-button--primary">Wake at the sanctuary</button>
+        <button type="button" id="set-out" class="hud-button hud-button--primary">Set out</button>
       </div>
-    </form>
+    </div>
   </dialog>
 
   <section id="error-panel" class="error-panel" role="alert" aria-live="assertive" hidden>
