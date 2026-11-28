@@ -7,7 +7,7 @@
  * and costs one turn. Long routes are walked one move action at a time by the
  * travel controller (travel.js), so the player never teleports.
  *
- * Terrain `moveCost` weights route choice only (a road around a forest beats
+ * Terrain `moveCost` weights route choice only (going around a forest beats
  * pushing through it); every hex entered costs one turn.
  */
 import { TERRAIN } from '../data/terrain.js';
