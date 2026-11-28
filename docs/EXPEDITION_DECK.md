@@ -33,7 +33,6 @@ Cards found or earned (see §3):
 | Card | Effect |
 |---|---|
 | **Wade** | 4 stride, and lets you cross shallow water at normal cost |
-| **Road March** | 14 stride, roads only |
 | **Second Wind** | 4 stride, and draw another card |
 | **Scout** | 2 stride, and +2 sight until nightfall |
 
@@ -67,7 +66,6 @@ Terrain keeps its current move cost (1–3). How much stride a step takes depend
 |---|---|---|
 | **New ground**: never walked | terrain cost × 2 | 2 / 4 / 6 |
 | **Known ground**: walked before, on any expedition | terrain cost | 1 / 2 / 3 |
-| **Road** | 1 | 1 |
 
 - "Walked" is a new piece of permanent map memory, stored alongside the seen/remembered fog state. Seeing a hex isn't enough. You have to have stood on it.
 - Over many expeditions, the land near the sanctuary becomes cheap to cross, and the expensive frontier moves outward. This is the sense of progress we want from mapping.
@@ -84,7 +82,6 @@ A **Home** estimate is always available: the stride needed to reach the sanctuar
 - The roll is seeded, so the same hex in the same world always gives the same result.
 - **The terrain decides the card**:
   - riverbanks and shallow water: Wade
-  - roads: Road March
   - hills and rocky ground: Climb
   - grassland: Walk or Second Wind
   - beside ruins: Scout

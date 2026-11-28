@@ -154,7 +154,8 @@ Names are suggestions; keep structure simple and consistent with the actual proj
 - **Sanctuary** (`world.js`): flood-fill the walkable regions and take the largest. Then scan hexes within 0.75·R in order of distance from the centre and pick the first grassland hex (falling back to any walkable land with cost ≤ 2) whose six neighbours are all walkable. Over 200 test seeds it always landed on grassland within 7 hexes of the centre and could reach at least 94% of walkable land.
 - **Chunking later:** terrain needs no chunk seeds, because `tileAt` is already pure in (seed, q, r). A chunk is an axial block evaluated on demand, with `hashInts(worldSeed, cq, cr)` available for chunk-local features (POIs). Only sanctuary placement is global on the bounded map; an unbounded world would run the same search over a fixed spawn region around (0,0).
 - **Generation cost** is about 15 ms for 4,921 tiles in Node on this machine.
-- **Deferred:** roads. (Ruins are points of interest since Task 08.) Rivers are noise contours, not flow-simulated, so a river can occasionally loop or end inland at high ground.
+- **No roads:** dropped from the design (2026-11-28). (Ruins are points of interest since Task 08.)
+- **Deferred:** rivers are noise contours, not flow-simulated, so a river can occasionally loop or end inland at high ground.
 
 ## State model
 Keep the distinction between:

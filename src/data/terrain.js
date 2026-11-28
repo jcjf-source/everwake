@@ -14,7 +14,7 @@
  *   herbs, food. 0 means a node of that kind never spawns here.
  *
  * Ruins from the design's initial terrain list are points of interest
- * (Task 08, src/data/pois.js), not base terrain. Roads are still deferred.
+ * (Task 08, src/data/pois.js), not base terrain. There are no roads (dropped from the design).
  */
 
 export const RESOURCE_KINDS = Object.freeze(['wood', 'stone', 'herbs', 'food']);

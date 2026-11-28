@@ -21,9 +21,9 @@ Everwake is an exploration game set in a vast world that exists independently of
 ## World
 - A single seeded world persists across expeditions. The same seed and coordinates produce stable terrain.
 - The long-term design is chunk-based and expandable in every direction; prototype scope may use a bounded region if the architecture permits later expansion.
-- Generate terrain in coherent layers: elevation and water flow; temperature/moisture; biome; terrain and vegetation; roads and landmarks; structures; creatures and events.
-- Initial terrain: grassland, forest, dense forest, water, shallow water, hills, mountains, sand, rocky ground, roads, ruins.
-- Points of interest should fit their surroundings. Ruins may be near old roads or defensible terrain; caves in rocky/mountainous regions; settlements near water and fertile land.
+- Generate terrain in coherent layers: elevation and water flow; temperature/moisture; biome; terrain and vegetation; landmarks; structures; creatures and events.
+- Initial terrain: grassland, forest, dense forest, water, shallow water, hills, mountains, sand, rocky ground, ruins. There are no roads.
+- Points of interest should fit their surroundings. Ruins may be on defensible terrain; caves in rocky/mountainous regions; settlements near water and fertile land.
 - World seed is displayed and retained. New-world creation must confirm before replacing an existing world.
 
 ## Hex movement and map
