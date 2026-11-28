@@ -13,7 +13,14 @@
  * there, fighting an enemy until it falls, being defeated), expeditions
  * (a voluntary return, the report after a return and after a defeat, learning
  * an upgrade, setting out again with the pack kept or lost), the seed dialog, URL seed retention, Centre, Coords, console cleanliness, and
- * drag frame times.
+ * drag frame times, and stride (G03: costs from an empty pool, playing cards
+ * from the hand, refusals, travel running out of stride).
+ *
+ * Stride: flows about other things load a saved fresh game with plenty of
+ * plain stride in the pool (`load(url, { stride: PLENTY })`, then Continue),
+ * so they never run short; the mirrors plan routes by stride as the page
+ * does (walked ground is mirrored too). verifyStride plays from the real,
+ * empty pool.
  *
  * Usage: node tools/browser/check-world.mjs [screenshotDir]
  * Set VIEWPORT=<name fragment> (e.g. phone-390) to run a single viewport.
@@ -70,6 +77,13 @@ const { setOut } = await imp('src/core/game.js');
 const { lastReport } = await imp('src/systems/expedition.js');
 const { buyUpgrade, upgradeView } = await imp('src/systems/progression.js');
 const X = await imp('src/ui/expeditionText.js');
+const { planningCostOf, planningCost } = await imp('src/systems/stride.js');
+const ST = await imp('src/ui/strideText.js');
+const { serializeGame, gameSummary: summaryOf } = await imp('src/systems/persistence.js');
+const SLOT = await imp('src/systems/saveSlot.js');
+const SAVE_TEXT = await imp('src/ui/saveText.js');
+/** Stride given to flows that are not about stride: more than any of them spends. */
+const PLENTY = 5000;
 /**
  * Enemies (Task 09). The general flows keep every hex the player stands on
  * out of every enemy's detection range (`quietPath`), so enemies stay idle
@@ -87,8 +101,15 @@ function idleEnemyAt(world, h) {
   const sp = spawnIndex.get(world).get(hexKey(h));
   return sp ? { id: sp.id, type: sp.type, health: ENEMY_TYPES[sp.type].health, mode: 'idle', position: sp, home: sp } : null;
 }
-/** Route options as the page plans them: mapped hexes only, around enemies in sight. */
-const routeOpts = (world) => ({ knows: (h) => mem.isKnown(h), avoid: (h) => !!idleEnemyAt(world, h) });
+/**
+ * Route options as the page plans them: mapped hexes only, around enemies in
+ * sight, cheapest in stride (walked ground from the mirror; plain stride, as
+ * the seeded pool is).
+ */
+const routeOpts = (world) => ({
+  knows: (h) => mem.isKnown(h), avoid: (h) => !!idleEnemyAt(world, h),
+  stepCost: planningCostOf({ world, isWalked: (h) => mem.isWalked(h), effect: null }),
+});
 /** The clock's event for the step that ends on `turn`, if it starts a new day part (game.js pipeline order: before discoveries). */
 const dayPartAt = (turn) => {
   const t = timeOf(turn);
@@ -117,17 +138,42 @@ async function clickEl(sel) {
 /**
  * Open `url`. The saved world (Task 13) is cleared first, so every flow
  * starts from a fresh world named by the URL, unless `keepSave` is set.
+ * With `stride` (G03), that fresh world is saved first with `stride` plain
+ * stride in its pool, and the start screen's Continue is pressed: the game
+ * is the same new game, but the flow never runs short of stride.
+ * `continuedText` is then the readout Continue leaves.
  */
-async function load(url, { keepSave = false } = {}) {
+let continuedText = null;
+async function load(url, { keepSave = false, stride = 0 } = {}) {
   const seed = new URL(url).searchParams.get('seed');
   if (seed && !keepSave) resetMemory(createWorld(seed, R));
   if (!keepSave) await s.send('Storage.clearDataForOrigin', { origin: new URL(s.appUrl).origin, storageTypes: 'local_storage' });
+  const seeded = !!seed && !keepSave && stride > 0;
+  continuedText = null;
+  if (seeded) {
+    const g = createGame(curWorld);
+    g.deck.addStride(stride);
+    const saved = JSON.stringify(serializeGame(g));
+    // Write it from a page of the app's origin: the one open now (the app
+    // saves only after actions, never on unload), else open the app first.
+    if ((await ev('location.origin')) !== new URL(s.appUrl).origin) {
+      await s.send('Page.navigate', { url: s.appUrl });
+      // Wait until it has started (and saved its own new world), then write over that.
+      for (let i = 0; i < 50 && !(await ev(`!!document.getElementById('seed-text')?.textContent`)); i++) await s.wait(100);
+    }
+    await ev(`localStorage.setItem(${JSON.stringify(SLOT.SAVE_KEY)}, ${JSON.stringify(saved)})`);
+    continuedText = SAVE_TEXT.describeContinued(summaryOf(g));
+  }
   await s.send('Page.navigate', { url });
   for (let i = 0; i < 50; i++) {
     await s.wait(100);
     if (await ev(`!!document.getElementById('seed-text') && document.getElementById('seed-text').textContent.length > 0`)) break;
   }
   await frame();
+  if (seeded) {
+    if (!(await ev(`document.getElementById('start-dialog').open`))) fail('the seeded save did not open the start screen');
+    else await clickEl('#start-continue');
+  }
 }
 
 /** Node mirror of the page's map memory; reset on every page load. */
@@ -137,14 +183,20 @@ let chg = null;
 let inv = null;
 /** The world the mirrors belong to (the page's current seed). */
 let curWorld = null;
-const resetMemory = (world) => { curWorld = world; mem = createMapMemory(R); mem.observe(world.sanctuary, SIGHT_RADIUS); chg = createWorldChanges(); inv = createInventory(STARTING_KIT); };
+const resetMemory = (world) => {
+  curWorld = world; mem = createMapMemory(R); mem.observe(world.sanctuary, SIGHT_RADIUS); mem.markWalked(world.sanctuary);
+  chg = createWorldChanges(); inv = createInventory(STARTING_KIT);
+};
 /**
  * The player stood on each of these hexes, in order. Returns the POI
  * discoveries of the last one (the events its readout ends with).
  */
 const walked = (hexes) => {
   let found = [];
-  for (const h of hexes) found = discoverIn({ world: curWorld, player: { position: h } }, mem.observe(h, SIGHT_RADIUS).newly);
+  for (const h of hexes) {
+    found = discoverIn({ world: curWorld, player: { position: h } }, mem.observe(h, SIGHT_RADIUS).newly);
+    mem.markWalked(h); // walked ground (G01): routes are planned by stride, cheaper there
+  }
   return found;
 };
 const knows = (h) => mem.isKnown(h);
@@ -172,7 +224,7 @@ const hereText = (world, pos) => `${describeSelection(pos, terrainOf(world, pos)
 /** The readout the page should show after an idle tap on `h` (mirrors main.js applyTapAction). */
 function expectTap(world, pos, h, preview = null) {
   const enemyAt = (x) => idleEnemyAt(world, x);
-  const { action } = decideTap(world, { position: pos, preview, travelling: null, knows, nodeAt: liveNodeOf(world), enemyAt }, h);
+  const { action } = decideTap(world, { position: pos, preview, travelling: null, knows, nodeAt: liveNodeOf(world), enemyAt, stepCost: routeOpts(world).stepCost }, h);
   switch (action.kind) {
     case 'enemy': return E.describeEnemyHex(labelOf(world, h), enemyAt(h), 'idle');
     case 'unexplored': return T.describeUnexplored(h);
@@ -198,7 +250,7 @@ async function playerState() {
 }
 
 async function hudBoxes() {
-  return ev(`[...document.querySelectorAll('button, #selection-readout, #player-status, #clock-status, #inventory-status, .hud-bottom')].map(b => { const r = b.getBoundingClientRect(); /* Gather buttons can appear above the readout later: reserve room for a row. */ const g = b.classList.contains('hud-bottom') ? { x: 160, y: 56 } : { x: 0, y: 0 }; return [r.left - 24 - g.x, r.top - 24 - g.y, r.right + 24 + g.x, r.bottom + 24]; })`);
+  return ev(`[...document.querySelectorAll('button, #selection-readout, #player-status, #clock-status, #inventory-status, .hud-bottom')].map(b => { const r = b.getBoundingClientRect(); /* Gather buttons can appear above the readout later: reserve room for a row (on short screens they share the hand's line, G03, so only its width). */ const shared = innerHeight <= 500 && document.querySelector('#hand button'); const g = b.classList.contains('hud-bottom') ? { x: 160, y: shared ? 0 : 56 } : { x: 0, y: 0 }; return [r.left - 24 - g.x, r.top - 24 - g.y, r.right + 24 + g.x, r.bottom + 24]; })`);
 }
 
 const initialCamera = (world, w, h) =>
@@ -276,7 +328,7 @@ function reachableKeys(world, from) {
 
 /** Tap-to-move flows: step, preview, travel, interrupt/resume, retarget, unreachable feedback. */
 async function verifyMovement(world, w, h, isTouch) {
-  await load(`${s.appUrl}?seed=everwake`);
+  await load(`${s.appUrl}?seed=everwake`, { stride: PLENTY });
   let cam = initialCamera(world, w, h);
   const tag = `${isTouch ? 'touch' : 'mouse'}-${w}x${h}`;
   const hud = await hudBoxes();
@@ -302,7 +354,7 @@ async function verifyMovement(world, w, h, isTouch) {
   let st = await playerState();
   check(st && hexEquals(st.pos, world.sanctuary) && st.turn === 0, `player starts on the sanctuary at turn 0: ${await text('player-status')}`);
   check((await text('clock-status')) === K.describeClock(0), `clock starts at day 1, morning: "${await text('clock-status')}"`);
-  check((await readout()) === T.MOVE_HINT, 'movement hint shown');
+  check((await readout()) === continuedText, `the start screen's Continue says where you are: "${await readout()}"`);
 
   // One-tap step to a neighbour, and back.
   const nb = hexNeighbors(st.pos).find((n) => world.isWalkable(n) && inner(n, 0.1));
@@ -489,9 +541,111 @@ async function verifyMovement(world, w, h, isTouch) {
   await recentre();
   await feedback(world, ['impassable']);
   const isle = createWorld('island-133', R);
-  await load(`${s.appUrl}?seed=island-133`);
+  await load(`${s.appUrl}?seed=island-133`, { stride: PLENTY });
   cam = initialCamera(isle, w, h);
   await feedback(isle, ['unreachable']);
+}
+
+/**
+ * Stride (G03), from the real, empty pool of a new game: the stride line and
+ * the hand's buttons match a Node mirror; stepping within the sanctuary's
+ * ward is free; a step beyond it is refused with no turn; playing a card
+ * takes no turn and fills the pool; the step then spends its stride; and a
+ * route longer than the pool stops when stride runs out, keeping the rest
+ * of the route (one tap tries it again).
+ */
+async function verifyStride(world, w, h, isTouch) {
+  await load(`${s.appUrl}?seed=${world.seed}`);
+  let cam = initialCamera(world, w, h);
+  const hud = await hudBoxes();
+  const view = () => C.cameraToView(cam, w, h);
+  const screenOf = (hh) => hexToScreen(view(), hh);
+  const tappable = (hh) => { const p = screenOf(hh); return p.x > w * 0.1 && p.x < w * 0.9 && p.y > h * 0.1 && p.y < h * 0.9 && !hud.some(([l, t, r, b]) => p.x >= l && p.x <= r && p.y >= t && p.y <= b); };
+  const tapHex = async (hh) => { const p = screenOf(hh); await tap(p.x, p.y, isTouch); };
+  const recentre = async () => { await clickEl('#recenter'); cam = C.centerOnHex(cam, (await playerState()).pos); };
+  const mg = createGame(world);
+  const turns = createTurnSystem({ reactions: createCombatReactions() });
+  const seen = (x) => (mg.memory.isVisible(x) ? mg.enemies.at(x) : null);
+  const note = (x) => G.nodeNote(mg.memory.isKnown(x) ? nodeState(mg, x) : null) + P.poiNote(mg.memory.isKnown(x) ? poiState(mg, x) : null)
+    + (seen(x) ? E.enemyNote(seen(x), enemyIntent(mg, seen(x))) : '');
+  const handShown = () => ev(`[...document.querySelectorAll('#hand button')].map(b => ({ text: b.textContent, label: b.getAttribute('aria-label'), disabled: b.disabled }))`);
+  const handWant = () => ST.handButtons(mg.deck.hand()).map((b) => ({ text: b.text, label: b.label, disabled: !b.playable }));
+  const agrees = async (label) => {
+    const got = { line: await text('stride-status'), hand: await handShown(), st: await playerState() };
+    const want = { line: ST.describeStride(mg.deck), hand: handWant() };
+    const ok = got.line === want.line && JSON.stringify(got.hand) === JSON.stringify(want.hand)
+      && hexEquals(got.st.pos, mg.player.position) && got.st.turn === mg.clock.turn;
+    if (!ok) fail(`${label}: page ${JSON.stringify(got)} want ${JSON.stringify({ ...want, pos: mg.player.position, turn: mg.clock.turn })}`);
+    return ok;
+  };
+
+  check((await readout()) === T.MOVE_HINT, 'a new world shows the movement hint');
+  check(await agrees('a new expedition'), `the stride line and a hand of ${mg.deck.hand().length}: "${await text('stride-status')}" ${JSON.stringify((await handShown()).map((b) => b.text))}`);
+  const fit = await ev(`(() => { const bs = [...document.querySelectorAll('#hand button')]; return bs.length > 0 && bs.every(b => { const r = b.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth && r.bottom <= innerHeight && r.height >= 44; }); })()`);
+  check(fit, 'the hand buttons fit the screen and are touch-sized');
+  await shot(`stride-hand-${w}x${h}`);
+
+  // Within the ward steps are free; the first hex beyond it is not.
+  const home = world.sanctuary;
+  const pair = hexNeighbors(home)
+    .filter((a) => world.isWalkable(a) && quiet(world, a) && tappable(a))
+    .flatMap((a) => hexNeighbors(a).filter((b) => hexDistance(b, home) === 2 && world.isWalkable(b) && quiet(world, b) && tappable(b)).map((b) => ({ a, b })))
+    .sort((x, y) => (world.tileAt(x.b).terrain === 'grassland' ? 0 : 1) - (world.tileAt(y.b).terrain === 'grassland' ? 0 : 1))[0];
+  if (!pair) { fail('no quiet ward hex with a hex beyond it on screen'); return; }
+  await tapHex(pair.a);
+  let res = turns.perform(mg, { type: 'move', to: pair.a });
+  check(res.ok && res.stride === 0 && (await readout()) === K.withEvents(T.describeStepped(labelOf(world, pair.a)) + note(pair.a), res.events) && (await agrees('in the ward')),
+    `a step on sanctuary ground is free: "${await readout()}"`);
+  walked([pair.a]);
+  await recentre();
+  await tapHex(pair.b);
+  const refused = turns.perform(mg, { type: 'move', to: pair.b });
+  check(!refused.ok && refused.reason === 'noStride' && (await readout()) === ST.describeNoStride(labelOf(world, pair.b), refused.cost, 0) && (await agrees('refused')),
+    `a step beyond the ward with an empty pool is refused, no turn: "${await readout()}"`);
+
+  // Play a card: no turn, the pool fills, the hand shrinks.
+  // A plain card (Walk or Trek), so no card effect changes the price.
+  const index = mg.deck.hand().findIndex((id) => id === 'walk' || id === 'trek');
+  if (index < 0) { fail(`no Walk or Trek in the opening hand ${JSON.stringify(mg.deck.hand())}`); return; }
+  await clickEl(`#hand button[data-card-index="${index}"]`);
+  res = turns.perform(mg, { type: 'playCard', index });
+  check(res.ok && res.cost === 0 && (await readout()) === K.describeEvents(res.events) && (await agrees('played')),
+    `playing a card takes no turn: "${await readout()}" · "${await text('stride-status')}"`);
+  await tapHex(pair.b);
+  res = turns.perform(mg, { type: 'move', to: pair.b });
+  check(res.ok && res.stride === refused.cost && (await readout()) === K.withEvents(T.describeStepped(labelOf(world, pair.b)) + note(pair.b), res.events) && (await agrees('paid')),
+    `now the step is paid: ${res.stride} stride, one turn: "${await text('stride-status')}"`);
+  walked([pair.b]);
+  await shot(`stride-paid-${w}x${h}`);
+
+  // A route longer than the pool: travel stops when stride runs out.
+  await recentre();
+  const pos = mg.player.position;
+  const opts = { knows: mg.memory.isKnown, avoid: (x) => !!seen(x), stepCost: planningCost(mg) };
+  const far = mg.memory.knownHexes()
+    .filter((x) => hexDistance(x, pos) >= 3 && tappable(x) && !world.poiAt(x))
+    .map((x) => ({ x, r: planRoute(world, pos, x, opts) }))
+    .filter(({ r }) => r.status === 'ok' && r.path.length <= 10 && r.cost >= mg.deck.pool() + 4 && quietPath(world, r.path) && !discoversAlong(world, r.path))
+    .sort((p, q) => p.r.path.length - q.r.path.length)[0];
+  if (!far) { fail('no quiet mapped route longer than the pool on screen'); return; }
+  await tapHex(far.x);
+  check((await readout()).startsWith('Route to'), `a long route previews: "${await readout()}"`);
+  await tapHex(far.x);
+  const run = await watchTravel(pos);
+  let last = null;
+  for (const x of run.seen.slice(1)) { last = turns.perform(mg, { type: 'move', to: x }); walked([x]); }
+  const done = run.seen.length - 1;
+  const short = done < far.r.path.length ? turns.perform(mg, { type: 'move', to: far.r.path[done] }) : null;
+  check(!!short && short.reason === 'noStride' && (!last || last.ok)
+    && run.readout === ST.describeNeedStride(labelOf(world, far.x), done, far.r.path.length, short.cost, short.pool) && (await agrees('out of stride')),
+    `travel stops when stride runs out: "${run.readout}"`);
+  await shot(`stride-out-${w}x${h}`);
+  // The rest of the route is still planned: one tap tries it again (and stops at once).
+  await recentre();
+  await tapHex(far.x);
+  const again = await watchTravel(mg.player.position);
+  check(again.seen.length === 1 && again.readout === ST.describeNeedStride(labelOf(world, far.x), 0, far.r.path.length - done, short?.cost, short?.pool) && (await agrees('still short')),
+    `the rest of the route stays: "${again.readout}"`);
 }
 
 /** The context buttons on the page: `[{ text, label, index }]`. */
@@ -511,7 +665,7 @@ const sameButtons = (got, want) => JSON.stringify(got.map(({ text, label }) => (
  * by tapping it (approach route), if one is mapped near the start.
  */
 async function verifyGathering(world, w, h, isTouch) {
-  await load(`${s.appUrl}?seed=everwake`);
+  await load(`${s.appUrl}?seed=everwake`, { stride: PLENTY });
   let cam = initialCamera(world, w, h);
   const hud = await hudBoxes();
   const view = () => C.cameraToView(cam, w, h);
@@ -579,13 +733,13 @@ async function verifyGathering(world, w, h, isTouch) {
   // it. Such nodes are rare in sight of a start; shore-42 (found by searching
   // seeds) has mountain stone a few hexes from its sanctuary.
   const aw = createWorld('shore-42', R);
-  await load(`${s.appUrl}?seed=shore-42`);
+  await load(`${s.appUrl}?seed=shore-42`, { stride: PLENTY });
   cam = initialCamera(aw, w, h);
   st = await playerState();
   const far = aw.resourceNodes
     .filter((n) => knows(n) && !aw.isWalkable(n) && tappable(n) && hexDistance(n, st.pos) >= 2)
     .sort((x, y) => hexDistance(x, st.pos) - hexDistance(y, st.pos))
-    .map((n) => ({ n, a: planApproach(aw, st.pos, n, { knows }) }))
+    .map((n) => ({ n, a: planApproach(aw, st.pos, n, { knows, stepCost: routeOpts(aw).stepCost }) }))
     .find((x) => x.a && x.a.path.length > 0 && !discoversAlong(aw, x.a.path) && quietPath(aw, x.a.path));
   if (!far) { fail('shore-42: no mapped impassable node to approach'); return; }
   const fat = { q: far.n.q, r: far.n.r };
@@ -613,7 +767,7 @@ async function verifyGathering(world, w, h, isTouch) {
  * the land around it and discovers a chest.
  */
 async function verifyPois(world, w, h, isTouch) {
-  await load(`${s.appUrl}?seed=everwake`);
+  await load(`${s.appUrl}?seed=everwake`, { stride: PLENTY });
   let cam = initialCamera(world, w, h);
   const hud = await hudBoxes();
   const view = () => C.cameraToView(cam, w, h);
@@ -757,7 +911,7 @@ async function verifyPois(world, w, h, isTouch) {
 
   // A shrine: reading it maps the land around and discovers what is there.
   const sw = createWorld('shrine-64', R);
-  await load(`${s.appUrl}?seed=shrine-64`);
+  await load(`${s.appUrl}?seed=shrine-64`, { stride: PLENTY });
   cam = initialCamera(sw, w, h);
   const shrine = sw.pois.find((p) => p.type === 'shrine' && knows(p));
   if (shrine && !tappable(shrine)) await bringIntoView(shrine);
@@ -799,18 +953,19 @@ async function verifyPois(world, w, h, isTouch) {
  * each readout, the health line and the buttons are compared exactly.
  */
 async function verifyEnemies(world, w, h, isTouch) {
-  await load(`${s.appUrl}?seed=everwake`);
+  await load(`${s.appUrl}?seed=everwake`, { stride: PLENTY });
   let cam = initialCamera(world, w, h);
   const view = () => C.cameraToView(cam, w, h);
   const screenOf = (hh) => hexToScreen(view(), hh);
   const tapHex = async (hh) => { const p = screenOf(hh); await tap(p.x, p.y, isTouch); };
   const recentre = async () => { await clickEl('#recenter'); cam = C.centerOnHex(cam, (await playerState()).pos); };
   const mg = createGame(world);
+  mg.deck.addStride(PLENTY); // as the page's seeded save
   const turns = createTurnSystem({ reactions: createCombatReactions() });
   const seen = (x) => (mg.memory.isVisible(x) ? mg.enemies.at(x) : null);
   const note = (x) => G.nodeNote(mg.memory.isKnown(x) ? nodeState(mg, x) : null) + P.poiNote(mg.memory.isKnown(x) ? poiState(mg, x) : null)
     + (seen(x) ? E.enemyNote(seen(x), enemyIntent(mg, seen(x))) : '');
-  const opts = () => ({ knows: mg.memory.isKnown, avoid: (x) => !!seen(x) });
+  const opts = () => ({ knows: mg.memory.isKnown, avoid: (x) => !!seen(x), stepCost: planningCost(mg) });
   const allEvents = [];
   const healthWant = () => CT.describeHealth(mg.player.health, mg.player.maxHealth);
   const synced = async (label) => {
@@ -1102,10 +1257,11 @@ async function verifySanctuary(mg, label) {
  * pack, which the next expedition sets out with.
  */
 async function verifyReturn(world, w, h, isTouch) {
-  await load(`${s.appUrl}?seed=${world.seed}`);
+  await load(`${s.appUrl}?seed=${world.seed}`, { stride: PLENTY });
   let cam = initialCamera(world, w, h);
   const tapHex = async (hh) => { const p = hexToScreen(C.cameraToView(cam, w, h), hh); await tap(p.x, p.y, isTouch); };
   const mg = createGame(world);
+  mg.deck.addStride(PLENTY);
   const turns = createTurnSystem({ reactions: createCombatReactions() });
   const home = world.sanctuary;
   /** One step by tapping a neighbour, recentred first so it is clear of the HUD. */
@@ -1158,8 +1314,9 @@ async function verifyReturn(world, w, h, isTouch) {
  * health), and Take off / Equip each take one turn and change the stats.
  */
 async function verifyPack(world, w, h, isTouch) {
-  await load(`${s.appUrl}?seed=${world.seed}`);
+  await load(`${s.appUrl}?seed=${world.seed}`, { stride: PLENTY });
   const mg = createGame(world);
+  mg.deck.addStride(PLENTY);
   const turns = createTurnSystem({ reactions: createCombatReactions() });
   const statsWant = () => { const v = inventoryView(mg).stats; return `${CT.describeHealth(v.health, v.maxHealth)} · ${IT.describeStats(v)}`; };
   const rows = () => ev(`[...document.querySelectorAll('#pack-slots .pack-row__name, #pack-list .pack-row__name')].map(e => e.textContent)`);
@@ -1237,7 +1394,7 @@ const colourDistance = (a, b) => Math.hypot(a.r - b.r, a.g - b.g, a.b - b.b);
  * dialog shows and picks explored hexes.
  */
 async function verifyFog(world, w, h, isTouch) {
-  await load(`${s.appUrl}?seed=everwake`);
+  await load(`${s.appUrl}?seed=everwake`, { stride: PLENTY });
   let cam = initialCamera(world, w, h);
   const view = () => C.cameraToView(cam, w, h);
   const hud = await hudBoxes();
@@ -1572,6 +1729,9 @@ try {
 
     console.log('  -- movement');
     await verifyMovement(world, w, h, mobile);
+
+    console.log('  -- stride');
+    await verifyStride(world, w, h, mobile);
 
     console.log('  -- gathering');
     await verifyGathering(world, w, h, mobile);

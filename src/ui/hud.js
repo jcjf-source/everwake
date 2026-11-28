@@ -3,7 +3,8 @@
  * line, the world
  * clock with its Wait button, the inventory line, the contextual action
  * buttons (Attack / Defend / Flee / Use in a fight, Search / Open / Read for
- * points of interest, Gather for resource nodes), the coordinate debug toggle, and zoom / recentre buttons (an
+ * points of interest, Gather for resource nodes), the stride line and one
+ * button per movement card in hand (G03), the coordinate debug toggle, and zoom / recentre buttons (an
  * alternative to wheel and pinch). Recentre centres on the player.
  */
 import { hexDistance } from '../world/hex.js';
@@ -40,7 +41,7 @@ export function describeSelection(selected, terrain = null, sanctuary = null) {
  *   readout: HTMLElement, status: HTMLElement, coordsToggle: HTMLButtonElement,
  *   zoomIn: HTMLButtonElement, zoomOut: HTMLButtonElement, recenter: HTMLButtonElement,
  *   clock: HTMLElement, wait: HTMLButtonElement, health: HTMLElement,
- *   inventory: HTMLElement, actions: HTMLElement,
+ *   inventory: HTMLElement, actions: HTMLElement, stride: HTMLElement, hand: HTMLElement,
  * }} el
  * @param {{
  *   onToggleCoords: (on: boolean) => void,
@@ -48,6 +49,7 @@ export function describeSelection(selected, terrain = null, sanctuary = null) {
  *   onRecenter: () => void,
  *   onWait: () => void,
  *   onAction: (index: number) => void,
+ *   onPlayCard: (index: number) => void,
  * }} handlers
  */
 export function createHud(el, handlers) {
@@ -64,7 +66,12 @@ export function createHud(el, handlers) {
     const btn = e.target.closest('button[data-index]');
     if (btn) handlers.onAction(Number(btn.dataset.index));
   });
+  el.hand.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-card-index]');
+    if (btn && !btn.disabled) handlers.onPlayCard(Number(btn.dataset.cardIndex));
+  });
   let actionsSig = null;
+  let handSig = null;
 
   return {
     /** Main feedback line (selection, route, travel progress). */
@@ -136,6 +143,32 @@ export function createHud(el, handlers) {
         return btn;
       }));
       el.actions.hidden = buttons.length === 0;
+    },
+    /** The stride line (strideText.describeStride). */
+    showStride(text) {
+      if (el.stride.textContent !== text) el.stride.textContent = text;
+    },
+    /**
+     * One button per card in hand (`[{ index, card, text, label, playable }]`,
+     * strideText.handButtons); unplayable cards (Weary) are shown disabled.
+     * Rebuilt only when the hand changes, so focus survives a refresh.
+     */
+    showHand(cards, enabled = true) {
+      const sig = JSON.stringify([cards, enabled]);
+      if (sig === handSig) return;
+      handSig = sig;
+      el.hand.replaceChildren(...cards.map((c) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'hud-button hud-button--small hud-button--card';
+        btn.dataset.card = c.card;
+        btn.dataset.cardIndex = String(c.index);
+        btn.disabled = !c.playable || !enabled;
+        btn.setAttribute('aria-label', c.label);
+        btn.title = c.label;
+        btn.textContent = c.text;
+        return btn;
+      }));
     },
     /** Wait is unavailable while a route is being walked. */
     setWaitEnabled(on) {

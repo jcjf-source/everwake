@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { hex, hexDistance, hexKey, hexCorners, hexesInRange } from '../src/world/hex.js';
+import { hex, hexDistance, hexKey, hexCorners, hexesInRange, hexNeighbors } from '../src/world/hex.js';
 import { createMapMemory, restoreMapMemory, canSee, FOG, SIGHT_RADIUS, MAP_MEMORY_VERSION } from '../src/world/mapMemory.js';
 import { createWorld } from '../src/world/world.js';
 import { createGame, createTurnSystem } from '../src/core/game.js';
@@ -8,9 +8,10 @@ import { planRoute } from '../src/systems/movement.js';
 import { decideTap } from '../src/ui/moveIntent.js';
 import * as text from '../src/ui/travelText.js';
 import { fitView, hexToScreen, visibleHexes } from '../src/render/gridView.js';
-import { drawGrid, REMEMBERED_VEIL } from '../src/render/gridRenderer.js';
+import { drawGrid, REMEMBERED_VEIL, WALKED_DEBUG_FILL } from '../src/render/gridRenderer.js';
 import { TERRAIN_PALETTE } from '../src/render/terrainStyle.js';
 import { asciiWorld } from './helpers/asciiMap.js';
+import { giveStride } from './helpers/stride.js';
 
 const ORIGIN = hex(0, 0);
 const keys = (hexes) => new Set(hexes.map(hexKey));
@@ -172,7 +173,7 @@ test('decideTap: unmapped hexes are explained, never routed to', () => {
 
 test('exploring a generated world: start reveals only nearby hexes; walking reveals the path corridor', () => {
   const world = createWorld('everwake', 40);
-  const game = createGame(world);
+  const game = giveStride(createGame(world));
   const { player, memory: m } = game;
   const turns = createTurnSystem();
   assert.deepEqual(keys(m.knownHexes()), keys(hexesInRange(world.sanctuary, SIGHT_RADIUS)), 'only nearby tiles at start');
@@ -298,4 +299,151 @@ test('fog edge: clouds go on unknown hexes bordering the map, and one ring beyon
   // Nothing known: no clouds anywhere. Everything known: none either.
   assert.deepEqual(fogFrontier(cells, createMapMemory(R).stateAt), { edge: [], outer: [] });
   assert.deepEqual(fogFrontier(cells, () => FOG.VISIBLE), { edge: [], outer: [] });
+});
+
+// ---------------------------------------------------------------- walked ground (G01)
+
+/** Small deterministic generator for the fuzz tests. */
+function lcg(seed) {
+  let s = seed >>> 0;
+  return () => { s = (Math.imul(s, 1664525) + 1013904223) >>> 0; return s / 2 ** 32; };
+}
+
+test('walked ground: seeing is not walking; only known map hexes can be walked', () => {
+  const R = 8;
+  const m = createMapMemory(R);
+  assert.equal(m.walkedCount(), 0);
+  assert.deepEqual(m.walkedHexes(), []);
+  assert.equal(m.markWalked(hex(1, 1)), false, 'an unknown hex cannot be walked');
+  m.observe(hex(0, 0), 3);
+  m.reveal(hex(5, -2), 1);
+  for (const h of hexesInRange(ORIGIN, R)) assert.equal(m.isWalked(h), false, 'observe and reveal walk nothing');
+  assert.equal(m.markWalked(hex(0, 0)), true);
+  assert.equal(m.markWalked(hex(0, 0)), false, 'a second visit is not new');
+  assert.equal(m.markWalked(hex(5, -2)), true, 'remembered ground can be walked');
+  assert.equal(m.markWalked(hex(R + 1, 0)), false, 'off the map');
+  assert.equal(m.markWalked(null), false);
+  assert.equal(m.isWalked(hex(R + 1, 0)), false);
+  assert.equal(m.walkedCount(), 2);
+  assert.deepEqual(m.walkedHexes(), [hex(5, -2), hex(0, 0)], 'row by row');
+  // Walking changes no fog state.
+  assert.equal(m.stateAt(hex(5, -2)), FOG.REMEMBERED);
+  assert.equal(m.knownCount, hexesInRange(ORIGIN, 3).length + 7);
+});
+
+test('walked ground: version 2 round trip; version 1 loads with nothing walked; malformed walked data rejected', () => {
+  const R = 40;
+  const m = createMapMemory(R);
+  for (const at of [hex(0, 0), hex(3, -1), hex(-20, 10), hex(40, -40)]) { m.observe(at); m.markWalked(at); }
+  m.markWalked(hex(1, 0));
+  const saved = JSON.parse(JSON.stringify(m.serialize()));
+  assert.equal(saved.version, 2);
+  assert.ok(saved.walked.length < 900, `compact: ${saved.walked.length} chars`);
+  const back = restoreMapMemory(saved, R);
+  assert.ok(back.ok, back.error);
+  assert.equal(back.version, 2);
+  assert.deepEqual(back.memory.walkedHexes(), m.walkedHexes());
+  assert.equal(back.memory.walkedCount(), 5);
+  assert.deepEqual(back.memory.knownHexes(), m.knownHexes());
+
+  const v1 = { version: 1, radius: R, known: saved.known };
+  const old = restoreMapMemory(v1, R);
+  assert.ok(old.ok, old.error);
+  assert.equal(old.version, 1);
+  assert.equal(old.memory.walkedCount(), 0);
+  assert.deepEqual(old.memory.knownHexes(), m.knownHexes());
+
+  const reject = (data, pattern) => {
+    const r = restoreMapMemory(data, R);
+    assert.equal(r.ok, false, JSON.stringify(data).slice(0, 80));
+    assert.match(r.error, pattern);
+  };
+  reject({ ...saved, walked: undefined }, /walked ground/);
+  reject({ ...saved, walked: '###' }, /walked ground is not valid base64/);
+  reject({ ...saved, walked: 'AAAA' }, /walked ground has the wrong length/);
+  reject({ ...saved, version: 3 }, /unsupported/);
+  // A walked hex that is not known.
+  const ghost = createMapMemory(R);
+  ghost.observe(hex(0, 0), 0);
+  ghost.markWalked(hex(0, 0));
+  reject({ ...saved, walked: ghost.serialize().walked, known: createMapMemory(R).serialize().known }, /not on the map/);
+});
+
+test('walked ground fuzz: random walks round-trip exactly; scrambled walked bits never load with a walked hex unknown', () => {
+  const R = 12;
+  const rand = lcg(1234);
+  for (let trial = 0; trial < 40; trial++) {
+    const m = createMapMemory(R);
+    const all = hexesInRange(ORIGIN, R);
+    for (let i = 0; i < 1 + Math.floor(rand() * 30); i++) {
+      const at = all[Math.floor(rand() * all.length)];
+      m.observe(at, Math.floor(rand() * 4));
+      if (rand() < 0.7) m.markWalked(at);
+    }
+    for (const h of m.walkedHexes()) assert.ok(m.isKnown(h), 'walked is always known');
+    const saved = JSON.parse(JSON.stringify(m.serialize()));
+    const back = restoreMapMemory(saved, R);
+    assert.ok(back.ok, back.error);
+    assert.deepEqual(back.memory.walkedHexes(), m.walkedHexes());
+    assert.equal(back.memory.walkedCount(), m.walkedCount());
+
+    // Flip random bits of the walked set: either refused, or every walked hex known.
+    const bytes = Uint8Array.from(atob(saved.walked), (c) => c.charCodeAt(0));
+    for (let k = 0; k < 3; k++) bytes[Math.floor(rand() * bytes.length)] ^= 1 << Math.floor(rand() * 8);
+    const flipped = { ...saved, walked: btoa(String.fromCharCode(...bytes)) };
+    const r = restoreMapMemory(flipped, R);
+    if (r.ok) for (const h of r.memory.walkedHexes()) assert.ok(r.memory.isKnown(h));
+    else assert.match(r.error, /walked ground/);
+  }
+});
+
+test('walked ground in play: a route marks exactly the hexes entered (and the start), never what was only seen', () => {
+  const world = createWorld('everwake', 40);
+  const game = giveStride(createGame(world));
+  const { memory: m } = game;
+  const turns = createTurnSystem();
+  assert.deepEqual(m.walkedHexes(), [world.sanctuary], 'the start is walked');
+  const entered = [world.sanctuary];
+  for (let leg = 0; leg < 3; leg++) {
+    const target = m.knownHexes()
+      .filter((h) => hexDistance(h, game.player.position) === SIGHT_RADIUS && world.isWalkable(h))
+      .map((h) => planRoute(world, game.player.position, h, { knows: m.isKnown }))
+      .find((r) => r.status === 'ok');
+    assert.ok(target, `leg ${leg}`);
+    for (const step of target.path) {
+      assert.ok(turns.perform(game, { type: 'move', to: step }).ok);
+      entered.push(step);
+    }
+  }
+  assert.ok(turns.perform(game, { type: 'wait' }).ok, 'standing still walks nothing new');
+  assert.deepEqual(keys(m.walkedHexes()), keys(entered));
+  assert.equal(m.walkedCount(), keys(entered).size);
+  assert.ok(m.knownCount > 4 * m.walkedCount(), 'far more seen than walked');
+  // A refused move marks nothing.
+  const before = m.walkedCount();
+  assert.equal(turns.perform(game, { type: 'move', to: hex(99, 0) }).ok, false);
+  assert.equal(m.walkedCount(), before);
+});
+
+test('renderer: walked footprints are drawn only when asked (debug), on walked known hexes', () => {
+  const world = createWorld('everwake', 40);
+  const game = createGame(world);
+  const m = game.memory;
+  const step = hexNeighbors(world.sanctuary).find(world.isWalkable);
+  assert.ok(createTurnSystem().perform(game, { type: 'move', to: step }).ok);
+  const width = 800;
+  const height = 600;
+  const size = 10;
+  const centre = hexToScreen({ originX: 0, originY: 0, size }, world.sanctuary);
+  const view = { originX: width / 2 - centre.x, originY: height / 2 - centre.y, size };
+  const cells = visibleHexes(view, width, height, world.has);
+  const base = { width, height, view, cells, has: world.has, tileAt: world.tileAt, sanctuary: world.sanctuary, ui: { hovered: null, selected: null, showCoords: false }, fog: m };
+  const footprints = (frame) => {
+    const rec = recordingContext();
+    drawGrid(rec.ctx, frame);
+    return rec.fills.filter((f) => f.style === WALKED_DEBUG_FILL).flatMap((f) => f.starts);
+  };
+  assert.equal(footprints(base).length, 0, 'off by default');
+  assert.equal(footprints({ ...base, walked: null }).length, 0);
+  assert.equal(footprints({ ...base, walked: m.isWalked }).length, 4, 'two prints on each of the two walked hexes');
 });

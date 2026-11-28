@@ -92,9 +92,10 @@ test('clock: save round trip and malformed saves', () => {
 
 // ---------------------------------------------------------------- actions
 
-test('every action definition costs a whole number of turns ≥ 1', () => {
+test('every action definition costs a whole number of turns ≥ 1, except playing a card (no turn)', () => {
   for (const [type, def] of Object.entries(ACTIONS)) {
-    assert.ok(Number.isInteger(def.cost) && def.cost >= 1, type);
+    if (type === 'playCard') assert.equal(def.cost, 0, type);
+    else assert.ok(Number.isInteger(def.cost) && def.cost >= 1, type);
     assert.equal(typeof def.validate, 'function', type);
     assert.equal(typeof def.apply, 'function', type);
   }

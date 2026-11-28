@@ -59,6 +59,8 @@ async function boot() {
     saveSlot,
     saveText,
     savePanels,
+    strideText,
+    { planningCost },
   ] = await Promise.all([
     import('./render/canvasSurface.js'),
     import('./render/camera.js'),
@@ -101,9 +103,14 @@ async function boot() {
     import('./systems/saveSlot.js'),
     import('./ui/saveText.js'),
     import('./ui/savePanels.js'),
+    import('./ui/strideText.js'),
+    import('./systems/stride.js'),
   ]);
 
   const canvas = document.getElementById('world-canvas');
+
+  // Debug only (G01): `?debug=walked` draws faint footprints on walked ground.
+  const debugWalked = new URLSearchParams(window.location.search).getAll('debug').includes('walked');
 
   // The seed is also kept in the URL (?seed=…) so the link can be shared.
   // The save (Task 13) is what a reload restores; a link naming another
@@ -249,6 +256,7 @@ async function boot() {
         gatherable: options.filter((x) => x.kind === 'gather').map((x) => x.o.at),
         usable: options.filter((x) => x.kind === 'interact').map((x) => x.o.at),
         enemies: visibleEnemies(),
+        walked: debugWalked ? memory.isWalked : null,
       });
     },
     report,
@@ -330,6 +338,8 @@ async function boot() {
     hud.setWaitEnabled(!travel.active && game.expedition.status === 'active');
     hud.showInventory(itemText.inventoryEntries(player.inventory));
     hud.showActions(contextOptions().map(buttonFor));
+    hud.showStride(strideText.describeStride(game.deck));
+    hud.showHand(strideText.handButtons(game.deck.hand()), game.expedition.status === 'active');
     surface.requestRepaint();
     mapPanel.refresh();
     journalPanel.refresh();
@@ -346,19 +356,19 @@ async function boot() {
       ui.travelTarget = null;
       ui.selected = target;
       readoutText = clockText.withEvents(text.describeArrived(label, e.total) + noteFor(target ?? e.destination), lastEvents);
-    } else if (e.type === 'stopped' || e.type === 'interrupted') {
+    } else if (e.type === 'stopped' || e.type === 'interrupted' || e.type === 'needStride') {
       // Keep the rest of the route as a preview: tapping the destination (or
       // the node it leads to) resumes.
-      const rest = planRoute(world, player.position, e.destination, { knows: memory.isKnown, avoid: enemyInfo });
+      const rest = planRoute(world, player.position, e.destination, { knows: memory.isKnown, avoid: enemyInfo, stepCost: planningCost(game) });
       const target = ui.travelTarget;
       ui.travelTarget = null;
       ui.preview = rest.status === 'ok'
         ? { destination: e.destination, path: rest.path, cost: rest.cost, ...(target ? { target } : {}) }
         : null;
       const resumeLabel = target ? labelOf(target) : label;
-      readoutText = e.type === 'stopped'
-        ? text.describeStopped(resumeLabel, e.done, e.total)
-        : clockText.withEvents(text.describeInterrupted(resumeLabel, e.done, e.total), lastEvents);
+      if (e.type === 'stopped') readoutText = text.describeStopped(resumeLabel, e.done, e.total);
+      else if (e.type === 'needStride') readoutText = strideText.describeNeedStride(resumeLabel, e.done, e.total, e.cost, e.pool);
+      else readoutText = clockText.withEvents(text.describeInterrupted(resumeLabel, e.done, e.total), lastEvents);
     } else if (e.type === 'blocked') {
       ui.preview = null;
       ui.travelTarget = null;
@@ -390,6 +400,7 @@ async function boot() {
         const result = act({ type: 'move', to: action.to });
         if (result.ok) readoutText = clockText.withEvents(text.describeStepped(labelOf(action.to)) + noteFor(action.to), lastEvents);
         else if (result.reason === 'occupied') readoutText = enemyText.describeOccupied(labelOf(action.to), game.enemies.at(action.to));
+        else if (result.reason === 'noStride') readoutText = strideText.describeNoStride(labelOf(action.to), result.cost, result.pool);
         else readoutText = text.describeImpassable(labelOf(action.to));
         if (result.ok) followPlayer();
         break;
@@ -462,6 +473,7 @@ async function boot() {
       {
         position: player.position, preview: ui.preview, travelling: travel.destination,
         travelTarget: ui.travelTarget, knows: memory.isKnown, nodeAt: liveNodeAt, enemyAt: enemyInfo,
+        stepCost: planningCost(game),
       },
       h,
     );
@@ -484,6 +496,8 @@ async function boot() {
       inventory: document.getElementById('inventory-status'),
       health: document.getElementById('health-status'),
       actions: document.getElementById('context-actions'),
+      stride: document.getElementById('stride-status'),
+      hand: document.getElementById('hand'),
     },
     {
       onToggleCoords(on) {
@@ -506,6 +520,13 @@ async function boot() {
         }
         refresh();
       },
+      onPlayCard(index) {
+        // Not a turn (G03): the deck changes, nothing else. A Scout card's
+        // sight is applied at once by the pipeline's observe step.
+        const result = act({ type: 'playCard', index });
+        readoutText = result.ok ? clockText.describeEvents(lastEvents) : strideText.describeCardRefused(result.reason);
+        refresh();
+      },
       onAction(index) {
         // Buttons are rebuilt on every refresh, so `index` names a current
         // option; the action is still validated by the turn pipeline.
@@ -517,6 +538,7 @@ async function boot() {
         ui.noWay = null;
         ui.selected = o.at ?? null;
         if (result.ok) readoutText = clockText.describeEvents(lastEvents);
+        else if (result.reason === 'noStride') readoutText = strideText.describeNoStride(labelOf(o.at ?? player.position), result.cost, result.pool);
         else if (kind === 'gather') readoutText = gatherText.describeGatherRefused(result.reason, labelOf(o.at));
         else if (kind === 'interact') readoutText = poiText.describeInteractRefused(result.reason, labelOf(o.at));
         else if (kind === 'return') readoutText = expeditionText.describeReturnRefused(result.reason);
@@ -731,6 +753,7 @@ async function boot() {
           fog: memory,
           nodeAt: nodeInfo,
           poiAt: poiInfo,
+          walked: debugWalked ? memory.isWalked : null,
         });
         return view;
       },

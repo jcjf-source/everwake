@@ -28,6 +28,9 @@ import { drawEnemies } from './enemyArt.js';
 /** Veil over remembered (seen before, not in sight) hexes. */
 export const REMEMBERED_VEIL = 'rgba(14,20,22,0.58)';
 
+/** Debug footprints on walked ground (G01, `?debug=walked` only). */
+export const WALKED_DEBUG_FILL = 'rgba(236,228,206,0.32)';
+
 /** Minimum on-screen hex size at which coordinate labels are legible. */
 export const MIN_LABEL_SIZE = 15;
 
@@ -84,7 +87,9 @@ function traceHex(ctx, cx, cy, size) {
  *   poiAt?: ((h: {q:number,r:number}) => object | null) | null,
  *   usable?: Array<{q:number,r:number}>,
  *   enemies?: Array<{ position: {q:number,r:number}, type: string, health: number, maxHealth: number, intent: string }>,
- * }} frame `fog` omitted: everything is drawn as visible. `nodeAt`: the
+ *   walked?: ((h: {q:number,r:number}) => boolean) | null,
+ * }} frame `fog` omitted: everything is drawn as visible. `walked`: debug
+ *   only (G01): faint footprints on hexes the player has stood on. `nodeAt`: the
  *   resource node state at a hex (gathering.js nodeState), asked only for
  *   mapped hexes; `gatherable`: nodes in reach now (ringed). `poiAt` and
  *   `usable`: the same for points of interest (systems/pois.js poiState).
@@ -167,6 +172,8 @@ export function drawGrid(ctx, frame) {
     drawFogEdge(ctx, view, cells, fog.stateAt);
   }
 
+  if (frame.walked) drawWalkedDebug(ctx, view, known.filter(frame.walked));
+
   // Hexes the player can step to with one tap, and nodes / POIs they can use now.
   if (frame.stepRim) drawStepRim(ctx, view, frame.stepRim);
   if (frame.gatherable) drawGatherTargets(ctx, view, frame.gatherable);
@@ -228,6 +235,26 @@ export function drawGrid(ctx, frame) {
   vignette.addColorStop(1, 'rgba(0,0,0,0.45)');
   ctx.fillStyle = vignette;
   ctx.fillRect(0, 0, width, height);
+}
+
+/** Debug view of walked ground: a faint pair of footprints on each hex, in one batched fill. */
+function drawWalkedDebug(ctx, view, hexes) {
+  if (hexes.length === 0) return;
+  const s = view.size;
+  const rx = s * 0.09;
+  const ry = s * 0.16;
+  ctx.beginPath();
+  for (const h of hexes) {
+    const c = hexToScreen(view, h);
+    for (const [dx, dy] of [[-0.16, 0.1], [0.16, -0.12]]) {
+      const x = c.x + dx * s;
+      const y = c.y + dy * s;
+      ctx.moveTo(x + rx, y);
+      ctx.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
+    }
+  }
+  ctx.fillStyle = WALKED_DEBUG_FILL;
+  ctx.fill();
 }
 
 function isOnScreen(view, h, width, height) {

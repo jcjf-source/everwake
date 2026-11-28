@@ -9,6 +9,11 @@
  * result: an encounter, say), which stops travel after that step; nothing happens between steps unless a route is active, and
  * no timer is left running once travel ends.
  *
+ * Stride (G03): a step the pool cannot pay for is refused (`noStride`) and
+ * changes nothing. Travel then stops with a `needStride` event instead of
+ * `blocked`: the route is still good, so the caller keeps the rest of it as
+ * a preview. Travel never plays cards by itself.
+ *
  * The timer is injectable so tests can drive travel deterministically.
  */
 
@@ -20,10 +25,12 @@ export const STEP_DELAY_MS = 150;
  * @typedef {{ type: 'step' | 'arrived', at: Hex, done: number, total: number, destination: Hex }
  *   | { type: 'stopped', done: number, total: number, destination: Hex }
  *   | { type: 'blocked', at: Hex, reason: string, done: number, total: number, destination: Hex }
- *   | { type: 'interrupted', at: Hex, reason: string, done: number, total: number, destination: Hex }} TravelEvent
+ *   | { type: 'interrupted', at: Hex, reason: string, done: number, total: number, destination: Hex }
+ *   | { type: 'needStride', at: Hex, cost: number, pool: number, done: number, total: number, destination: Hex }} TravelEvent
+ *   `needStride`: the next step (`at`) costs `cost` and the pool holds `pool`.
  *
  * @param {{
- *   step: (to: Hex) => { ok: boolean, reason?: string, interrupt?: { reason: string } | null },
+ *   step: (to: Hex) => { ok: boolean, reason?: string, cost?: number, pool?: number, interrupt?: { reason: string } | null },
  *   onEvent: (e: TravelEvent) => void,
  *   delay?: number,
  *   schedule?: (fn: () => void, ms: number) => unknown,
@@ -50,7 +57,8 @@ export function createTravel({ step, onEvent, delay = STEP_DELAY_MS, schedule = 
     if (!result.ok) {
       const done = route.index;
       finish();
-      onEvent({ type: 'blocked', at: to, reason: result.reason ?? 'blocked', done, total: path.length, destination });
+      if (result.reason === 'noStride') onEvent({ type: 'needStride', at: to, cost: result.cost, pool: result.pool, done, total: path.length, destination });
+      else onEvent({ type: 'blocked', at: to, reason: result.reason ?? 'blocked', done, total: path.length, destination });
       return;
     }
     route.index += 1;

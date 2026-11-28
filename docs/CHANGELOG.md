@@ -5,6 +5,36 @@ This file records notable project changes. It begins as a documentation scaffold
 
 ## Unreleased
 
+### G03: Stride costs
+- **Moving, gathering and searching now cost stride.** Each expedition sets out with the starting deck (8 Walk, 2 Trek, 1 Climb, 1 Forage), a hand of 5 cards and an empty stride pool. Play a card from the hand to add its stride to the pool; actions spend it.
+- **What things cost:** a step costs the terrain's move cost, **doubled on ground you have never walked** (grass 2, forest 4, dense forest 6; walked: 1, 2, 3). Gather and Search/Open/Read cost 3. Eating, equipping, fighting, fleeing, returning, waiting and playing cards cost nothing. **Sanctuary ground is free**: steps onto it, and gathering or searching from it.
+- **Card effects:** Climb halves hills and rocky ground while its stride lasts. Wade makes shallow water cost as grassland while its stride lasts. Forage gives one free Gather. Second Wind draws a card. Scout gives +2 sight for the rest of the day. Weary can't be played.
+- **Playing a card is not a turn:** the clock doesn't move and enemies don't react.
+- An action you can't pay for is refused and nothing happens: "needs 4 stride, you have 1 · play a card". **Travel stops when stride runs out** and keeps the rest of the route: play a card and tap the destination again. Travel never plays cards for you (one-tap auto-play comes in G04).
+- **Routes are planned to be cheapest in stride**, so they prefer ground you have walked. The route preview now says "route cost" instead of "terrain cost".
+- Every move and gather is still exactly one turn, and enemies act as before.
+- **For now:** the stride line ("Stride 4 · deck 7 · discard 2") is plain text in the status block, and the hand is a row of plain buttons above the actions. G04 brings the proper hand bar and the route-cost readout. There is only day 1 so far: when the hand is spent, the expedition can go no further from the sanctuary until G05 adds nights.
+- The expedition tally counts stride spent and cards played.
+- **Saves:** the save format is now version 2 and includes the deck. **Older saves still load**: they get a fresh deck for the current expedition.
+- Tests: costs on new and walked ground, the sanctuary, Climb, Wade and Forage only while they last, refusals that change nothing, playing cards, travel running out, stride-cheapest routes, the deck in the save round trip, and old saves (329 tests total). The browser check now gives flows that aren't about stride a saved game with plenty of stride, plans routes by stride as the page does, and adds a stride flow from a real empty pool. It passes on all four viewports.
+
+### G02: Movement deck core
+- **The movement deck exists as a module, with nothing connected to it yet.** It is groundwork for the expedition deck: G03 makes actions spend stride and G04 shows the hand. Play is unchanged.
+- Eight movement cards: Walk (6 stride), Trek (10), Climb (6, hills and rocky ground cost half while its stride lasts), Forage (3, one free Gather), Wade (4, shallow water costs as grassland while its stride lasts), Second Wind (4, draw another card), Scout (2, +2 sight) and Weary (no stride, can't be played). The effects are recorded as data; later tasks carry them out.
+- Every deck tuning number is in one file (`src/data/deckTuning.js`): the starting deck (8 Walk, 2 Trek, 1 Climb, 1 Forage), a hand of 5, Gather and Interact at 3 stride, a 12% find chance, and the drafted nightly and threat values.
+- The deck draws hands, plays cards, discards, reshuffles the discard pile when it runs out, and adds and removes cards. Every shuffle is seeded by the world seed, the expedition and the day, so the same game always deals the same cards.
+- Stride is kept in portions, one per card played, and the oldest is spent first, so Climb's and Wade's effects last exactly as long as their stride. Overspending is refused.
+- The deck has its own versioned save form, which refuses unknown cards, bad stride and card counts that don't add up.
+- Tests: card data, deterministic draws, reshuffles, Weary hands, spending across portions, the save round trip and its refusals, and fuzz passes (309 tests total). The browser check passes unchanged.
+
+### G01: Walked ground
+- **The game now remembers every hex you have stood on**, on every expedition, separately from what you have seen. This is groundwork for the expedition deck: later, ground you have walked will be cheaper to cross (G03), and new ground is where you find cards (G06). Movement and turns are unchanged for now.
+- A hex counts as walked when you end a step there (a move, fleeing, returning, or waking at the sanctuary after a defeat) and where each expedition sets out. Seeing a hex does not count.
+- Walked ground is kept through defeats, returns and new expeditions, and saved with the map. A new world starts fresh.
+- **Older saves still load.** Their walked ground starts empty except for the hex you stand on.
+- Debug only: add `?debug=walked` to the URL to see faint footprints on walked hexes.
+- Tests: walked-ground storage, the route-walking rule, round trips, old saves, refusals and fuzzing (285 tests total). The browser check passes unchanged.
+
 ### Task 13: Saving and loading
 - **Autosave:** the world is saved in this browser after every turn, when you set out, when you learn an upgrade, and when a new world begins. Reloading the page puts you back exactly where you were: mid-expedition, hunted if you were being hunted, or at the sanctuary screen between expeditions.
 - **What is saved:**

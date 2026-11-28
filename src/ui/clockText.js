@@ -11,6 +11,7 @@ import { describeEnemyEvent } from './enemyText.js';
 import { describeCombatEvent } from './combatText.js';
 import { describeItemEvent } from './itemText.js';
 import { describeExpeditionEvent } from './expeditionText.js';
+import { describeCardPlayed } from './strideText.js';
 
 const cap = (s) => s[0].toUpperCase() + s.slice(1);
 
@@ -33,6 +34,7 @@ export function describeEvent(e) {
   if (e.type === 'gathered') return describeGathered(e, NODE_KINDS[e.kind]);
   if (e.type === 'discovered') return describeDiscovered(e);
   if (e.type === 'interacted') return describeInteracted(e);
+  if (e.type === 'cardPlayed') return describeCardPlayed(e);
   const trip = describeExpeditionEvent(e);
   if (trip !== null) return trip;
   const item = describeItemEvent(e);

@@ -13,4 +13,4 @@ Replace on-map combat with battle scenes: an enemy that reaches you starts a bat
 - Report: the expedition tally counts battles won and fled.
 
 ## Acceptance
-An enemy reaching you starts a battle on the right arena, and travel stops. Playing a battle to a win, a flee and a defeat each returns to the world in the correct state. Enemies avoided by routing around them never start a battle. Battle turns cost no stride. A reload mid-battle resumes it. The scene works at the four viewports with touch and keyboard. The browser check has a battle flow, and all tests pass.
+An enemy reaching you starts a battle on the right arena, and travel stops. Playing a battle to a win, a flee and a defeat each returns to the world in the correct state. Enemies avoided by routing around them never start a battle. Battle turns cost no stride. A reload mid-battle resumes it. The scene works on desktop and portrait phone with touch and keyboard, and doesn't break on landscape phone: the arena and every battle control can be reached (README, decision 13). The browser check has a battle flow, and all tests pass.

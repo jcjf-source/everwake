@@ -7,8 +7,11 @@
  * and costs one turn. Long routes are walked one move action at a time by the
  * travel controller (travel.js), so the player never teleports.
  *
- * Terrain `moveCost` weights route choice only (going around a forest beats
- * pushing through it); every hex entered costs one turn.
+ * Every hex entered costs one turn. Route choice is weighted by cost: by
+ * default the terrain `moveCost` (going around a forest beats pushing
+ * through it); the game plans by stride instead (G03: `stepCost`, from
+ * systems/stride.js planningCost), so the planned route is the cheapest in
+ * stride.
  */
 import { TERRAIN } from '../data/terrain.js';
 import { hexDistance } from '../world/hex.js';
@@ -30,9 +33,12 @@ export function moveCostFn(world) {
  * never reads hidden terrain, so a preview cannot leak what fog conceals.
  * With `avoid` (hexes held by enemies the player can see), routes go
  * around those hexes; they are planned around where enemies are now, and
- * each step is re-validated as it is walked.
+ * each step is re-validated as it is walked. `stepCost` weights each hex
+ * entered (default: terrain `moveCost`); it must give finite costs ≥ 1 for
+ * hexes that can be entered (world/pathfinding.js), and `cost` is its sum.
  * @param {{ knows?: ((h: {q:number,r:number}) => boolean) | null,
- *   avoid?: ((h: {q:number,r:number}) => boolean) | null }} [opts]
+ *   avoid?: ((h: {q:number,r:number}) => boolean) | null,
+ *   stepCost?: ((h: {q:number,r:number}) => number) | null }} [opts]
  * @returns {{ status: 'here' }
  *   | { status: 'outside' }
  *   | { status: 'unexplored' }
@@ -41,12 +47,12 @@ export function moveCostFn(world) {
  *   | { status: 'ok', path: Array<{q:number,r:number}>, cost: number }}
  *   `path` excludes the starting hex, so `path.length` is the number of steps.
  */
-export function planRoute(world, from, to, { knows = null, avoid = null } = {}) {
+export function planRoute(world, from, to, { knows = null, avoid = null, stepCost = null } = {}) {
   if (!world.has(to)) return { status: 'outside' };
   if (hexDistance(from, to) === 0) return { status: 'here' };
   if (knows && !knows(to)) return { status: 'unexplored' };
   if (!world.isWalkable(to)) return { status: 'impassable' };
-  const cost = moveCostFn(world);
+  const cost = stepCost ?? moveCostFn(world);
   const costOf = (h) => ((knows && !knows(h)) || (avoid && avoid(h)) ? Infinity : cost(h));
   const result = findPath(from, to, { costOf });
   if (!result.found) return { status: 'unreachable' };

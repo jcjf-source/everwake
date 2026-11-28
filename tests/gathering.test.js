@@ -299,7 +299,7 @@ test('gather text', () => {
   assert.equal(G.describeGatherRefused('depleted', 'X'), 'X · picked clean, nothing left to gather');
   assert.equal(G.describeInReach('Mountains · q 1, r 1', nodeState(game, hex(1, 1))), 'Mountains · q 1, r 1 · Loose stone (stone) · 3 gathers left · in reach: tap Gather');
   assert.equal(G.describeApproach('Deep water · q 5, r 0', nodeState(game, hex(5, 0)), 4, 6),
-    'Route next to Deep water · q 5, r 0 · Fish shoal (food) · 2 gathers left · 4 steps, terrain cost 6 · tap it again to travel');
+    'Route next to Deep water · q 5, r 0 · Fish shoal (food) · 2 gathers left · 4 steps, route cost 6 · tap it again to travel');
   assert.equal(G.describeNodeBlocked('Deep water · q 6, r 1', nodeState(game, hex(6, 1))),
     'Deep water · q 6, r 1 · Fish shoal (food) · 2 gathers left · blocked: no route to a hex next to it');
   assert.deepEqual(G.gatherButton({ ...s, direction: null }), { text: 'Gather wood', where: 'here', label: 'Gather wood from deadfall here (2 gathers left)' });

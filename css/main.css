@@ -280,6 +280,31 @@ html, body {
 
 .hud-button--small { padding: 0 0.8rem; }
 
+/* Stride (G03): the line sits in the status block; the hand is one compact
+   row at the bottom, above the actions. Plain for now: the hand bar is G04. */
+.hud-status--stride { color: var(--parchment); }
+.hud-hand {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.3rem;
+  pointer-events: none;
+}
+.hud-hand:empty { display: none; }
+.hud-button--card {
+  padding: 0 0.55rem;
+  font-size: 0.8rem;
+  color: var(--parchment);
+  border-color: rgba(194, 163, 90, 0.65);
+}
+/* Short screens (landscape phones): the hand and the action buttons share one
+   line, so the bottom stack covers less of the map. */
+@media (max-height: 500px) {
+  .hud-bottom { flex-direction: row; flex-wrap: wrap; justify-content: center; align-items: center; }
+  .hud-bottom .hud-readout { flex-basis: 100%; width: auto; }
+}
+.hud-button--card:disabled { color: var(--fog); border-color: rgba(154, 167, 160, 0.25); }
+
 /* Carried resources: a coloured dot per resource. */
 .hud-status--inventory { color: var(--parchment); }
 .inv-item { white-space: nowrap; }

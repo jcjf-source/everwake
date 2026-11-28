@@ -28,7 +28,7 @@ export const describeInReach = (label, s) => `${label} · ${describeNode(s)} · 
 
 /** Preview of a route to a hex next to a node. */
 export const describeApproach = (label, s, steps, cost) =>
-  `Route next to ${label} · ${describeNode(s)} · ${plural(steps, 'step', 'steps')}, terrain cost ${cost} · tap it again to travel`;
+  `Route next to ${label} · ${describeNode(s)} · ${plural(steps, 'step', 'steps')}, route cost ${cost} · tap it again to travel`;
 
 /** A node with no mapped way to get next to it. */
 export const describeNodeBlocked = (label, s) =>

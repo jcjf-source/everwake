@@ -3,7 +3,9 @@
  * changes, and how many turns it costs.
  *
  * An action is a plain object `{ type, ...params }`. Every definition has:
- *  - `cost`: turns taken when it succeeds (an integer ≥ 1);
+ *  - `cost`: turns taken when it succeeds: an integer ≥ 1, or 0 for an
+ *    action that is not a turn (playing a card): the clock does not move
+ *    and nothing reacts;
  *  - `validate(game, action)`: `{ ok: true }` or `{ ok: false, reason }`.
  *    It must not change anything, so an invalid action costs nothing;
  *  - `apply(game, action)`: the player's own effect, run only after a
@@ -15,9 +17,12 @@
  * opening the map are not actions: they change only UI state and never take
  * a turn.
  *
- * Movement costs one turn per hex entered, whatever the terrain. Terrain
- * `moveCost` only weights route choice (decided in Task 06: the design says
- * moving one hex costs one turn, and path movement one turn per hex).
+ * Movement costs one turn per hex entered, whatever the terrain (decided in
+ * Task 06). Since G03 actions also cost stride from the day's pool
+ * (systems/stride.js): a step costs its terrain `moveCost`, doubled on
+ * ground never walked; Gather and Interact cost 3; the rest nothing.
+ * `validateAction` refuses an action the pool cannot pay for (`noStride`),
+ * after the action's own checks, so other reasons come first.
  */
 import { checkStep } from '../systems/movement.js';
 import { checkGather, gatherFrom } from '../systems/gathering.js';
@@ -29,6 +34,7 @@ import {
   checkUse, useItem, checkEquip, equipItem, checkUnequip, unequipSlot,
 } from '../systems/items.js';
 import { checkReturn, returnHome } from '../systems/expedition.js';
+import { checkStride, checkPlayCard, playCard } from '../systems/stride.js';
 
 /** @typedef {{ q: number, r: number }} Hex */
 
@@ -147,6 +153,16 @@ export const ACTIONS = Object.freeze({
     validate: (game) => checkReturn(game),
     apply: (game) => ({ events: returnHome(game) }),
   }),
+  /**
+   * Play the movement card at `index` in the hand: `{ type: 'playCard', index }`
+   * (systems/stride.js). Costs no stride and is not a turn: it changes the
+   * deck only, so enemies do not react.
+   */
+  playCard: Object.freeze({
+    cost: 0,
+    validate: (game, action) => checkPlayCard(game, action.index),
+    apply: (game, action) => ({ events: playCard(game, action.index) }),
+  }),
   /** Stay put and let a turn pass: `{ type: 'wait' }`. */
   wait: Object.freeze({
     cost: 1,
@@ -156,8 +172,11 @@ export const ACTIONS = Object.freeze({
 });
 
 /**
- * Validate an action without changing anything.
- * @returns {{ ok: true, def: object } | { ok: false, reason: string }}
+ * Validate an action without changing anything: its own checks, then
+ * whether the stride pool can pay for it.
+ * @returns {{ ok: true, def: object, stride: number }
+ *   | { ok: false, reason: string, cost?: number, pool?: number }}
+ *   `stride`: what it will cost; on `noStride`, `cost` and `pool` say how short it is.
  */
 export function validateAction(game, action) {
   if (!action || typeof action !== 'object') return { ok: false, reason: 'badAction' };
@@ -167,5 +186,8 @@ export function validateAction(game, action) {
   // world until the player sets out again (core/game.js setOut).
   if (game.expedition && game.expedition.status !== 'active') return { ok: false, reason: 'noExpedition' };
   const v = def.validate(game, action);
-  return v.ok ? { ok: true, def } : { ok: false, reason: v.reason };
+  if (!v.ok) return { ok: false, reason: v.reason };
+  const s = checkStride(game, action);
+  if (!s.ok) return { ok: false, reason: s.reason, cost: s.cost, pool: s.pool };
+  return { ok: true, def, stride: s.cost };
 }

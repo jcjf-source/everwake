@@ -22,4 +22,4 @@ End each day when the hand runs out, make the player camp, and make every night 
 Threat effects, ambushes, the ambush chance, battle.
 
 ## Acceptance
-Tests show: night falls exactly when nothing is affordable; camping early works; supper eats food in the right order; hunger costs health and a card; each night adds a Weary card; Rest removes one and costs food and a card; and returning home clears everything. The camp screen and dawn report work on desktop and phone sizes, with keyboard and touch. A reload at camp or mid-day resumes correctly. The browser check covers a full day → camp → dawn cycle.
+Tests show: night falls exactly when nothing is affordable; camping early works; supper eats food in the right order; hunger costs health and a card; each night adds a Weary card; Rest removes one and costs food and a card; and returning home clears everything. The camp screen and dawn report work on desktop and portrait phone, with keyboard and touch, and don't break on landscape phone (README, decision 13). A reload at camp or mid-day resumes correctly. The browser check covers a full day → camp → dawn cycle.

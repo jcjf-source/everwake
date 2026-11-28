@@ -37,9 +37,24 @@ Task files are executed one at a time. Mark a task complete only after its accep
 **Exit criteria:** complete multiple expeditions in one persistent world and progress between them.
 
 ## Milestone 6 — Usability and deployment
-- [ ] Task 14: Responsive UI, polish, accessibility pass
+- [ ] Task 14: Responsive UI, polish, accessibility pass (includes compact landscape-phone layouts for the hand bar, camp screen and battle scene, deferred from G04–G11 by `docs/gameplay/README.md` decision 13)
 - [ ] Task 15: GitHub Pages deployment verification
 **Exit criteria:** usable on desktop and mobile browser, documented deployment, no blocking errors.
+
+## Gameplay: Expedition deck
+Task files are in `docs/gameplay/`; the design is `docs/EXPEDITION_DECK.md`. Order, dependencies and review decisions are in `docs/gameplay/README.md`. Task 15 can go first. Do Task 14 after G11, or keep it to parts these tasks don't touch.
+- [x] G01: Walked ground (2026-11-28)
+- [x] G02: Movement deck core (2026-11-28)
+- [x] G03: Stride costs (2026-11-28)
+- [ ] G04: Hand bar and route preview
+- [ ] G05: Nightfall, camp and the nightly tick
+- [ ] G06: Finding movement cards
+- [ ] G07: Battle rules
+- [ ] G08: Battle scene
+- [ ] G09: Threat levels and night ambushes
+- [ ] G10: Upgrades, report and save checks
+- [ ] G11: Playtest and tuning pass
+**Exit criteria:** movement is paid for with cards, walked ground is cheaper, every night raises the stakes, and fights play out in separate battle scenes. Several expeditions in one world feel like progress.
 
 ## Rules for task execution
 1. Read `GAME_DESIGN.md`, `TECHNICAL.md`, `AI_RULES.md`, `ROADMAP.md`, and the selected task file.

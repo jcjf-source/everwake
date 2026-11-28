@@ -2,18 +2,24 @@
  * The save format (Task 13): the whole game as versioned, validated JSON.
  *
  *   {
- *     format: 'everwake-save', version: 1, savedAt: ISO time,
+ *     format: 'everwake-save', version: 2, savedAt: ISO time,
  *     world:      { seed, radius, sanctuary, versions: { terrain, resources, pois, enemies } },
  *     clock:      clock.js serializeClock
- *     memory:     mapMemory.js serialize (known hexes)   sight: last sight radius
+ *     memory:     mapMemory.js serialize (known and walked hexes; v1, known only, still loads)   sight: last sight radius
  *     changes:    worldChanges.js serialize (spent nodes, used places)
  *     journal:    journal.js serialize
  *     enemies:    enemies.js serialize (position, health, mode per spawn)
  *     player:     { position, health, maxHealth, inventory: { items, equipped } }
  *     expedition: { number, status, startTurn, knownAtStart, tally }
+ *     deck:       movementDeck.js serialize (the expedition's movement deck, G03)
  *     progress:   { insight, upgrades, history: [report…] }
  *     log:        the capped game log
  *   }
+ *
+ * Version 2 (G03) adds the deck and the tally's stride and cards. A version
+ * 1 save still loads: its expedition gets a fresh deck (the starting deck
+ * and day 1's hand, an empty pool) and its tally starts counting stride and
+ * cards from 0. Reports filed before G03 have no stride or cards.
  *
  * The world itself is not saved: it is regenerated from the seed, and the
  * save records which generator versions made it (and where its sanctuary
@@ -41,14 +47,15 @@ import { createInventory } from './inventory.js';
 import { ITEM_IDS, SLOTS, slotOf } from '../data/items.js';
 import { ENEMY_TYPE_IDS } from '../data/enemies.js';
 import { UPGRADE_IDS, maxLevel, effectAt } from '../data/upgrades.js';
-import { sightRadiusOf } from './expedition.js';
+import { sightRadiusOf, createExpeditionDeck } from './expedition.js';
+import { restoreDeck, MAX_SIGHT_BONUS } from './movementDeck.js';
 import { LOG_LIMIT } from '../core/game.js';
 
 export const SAVE_FORMAT = 'everwake-save';
-export const SAVE_VERSION = 1;
+export const SAVE_VERSION = 2;
 
-/** The widest sight a player can have (base plus every Cartographer level). */
-const MAX_SIGHT = SIGHT_RADIUS + effectAt('cartographer', maxLevel('cartographer'));
+/** The widest sight a player can have (base plus every Cartographer level, plus Scout). */
+const MAX_SIGHT = SIGHT_RADIUS + effectAt('cartographer', maxLevel('cartographer')) + MAX_SIGHT_BONUS;
 
 const clone = (x) => JSON.parse(JSON.stringify(x));
 const copyHex = (h) => ({ q: h.q, r: h.r });
@@ -77,6 +84,7 @@ export function serializeGame(game, { savedAt = new Date().toISOString() } = {})
       inventory: { items: { ...p.inventory.items }, equipped: { ...p.inventory.equipped } },
     },
     expedition: clone(game.expedition),
+    deck: game.deck.serialize(),
     progress: clone(game.progress),
     log: clone(game.log),
   };
@@ -141,7 +149,9 @@ function packProblem(inv, name) {
   return null;
 }
 
-const TALLY_COUNTS = ['steps', 'farthest', 'places', 'explored'];
+const TALLY_COUNTS = ['steps', 'farthest', 'places', 'explored', 'stride', 'cards'];
+/** Counts a report has only if it was filed since G03. */
+const REPORT_COUNTS_SINCE_G03 = ['stride', 'cards'];
 const REPORT_COUNTS = ['startTurn', 'endTurn', 'turns', 'steps', 'farthest', 'mapped', 'places', 'explored'];
 const INSIGHT_PARTS = ['mapping', 'places', 'explored', 'enemies', 'total'];
 
@@ -158,6 +168,7 @@ function reportProblem(r, i, turn) {
   if (!isPlain(r)) return `${name} is not an object`;
   if (r.number !== i + 1) return `${name} has the wrong number`;
   for (const k of REPORT_COUNTS) if (!isInt(r[k])) return `${name} ${k} must be a whole number`;
+  for (const k of REPORT_COUNTS_SINCE_G03) if (k in r && !isInt(r[k])) return `${name} ${k} must be a whole number`;
   if (r.endTurn < r.startTurn || r.turns !== r.endTurn - r.startTurn || r.endTurn > turn) return `${name} has impossible turns`;
   if (r.outcome !== 'returned' && r.outcome !== 'defeated') return `${name} has unknown outcome ${r.outcome}`;
   if (r.cause !== null && !(r.outcome === 'defeated' && ENEMY_TYPE_IDS.includes(r.cause))) return `${name} has an impossible cause`;
@@ -231,7 +242,8 @@ function restore(data, radius, makeWorld) {
   const fail = (error) => ({ ok: false, error });
   if (!isPlain(data) || data.format !== SAVE_FORMAT) return fail('this is not an Everwake save');
   if (Number.isSafeInteger(data.version) && data.version > SAVE_VERSION) return fail(`the save was made by a newer version of Everwake (save format ${data.version})`);
-  if (data.version !== SAVE_VERSION) return fail(`unsupported save format ${data.version}`);
+  if (data.version !== SAVE_VERSION && data.version !== 1) return fail(`unsupported save format ${data.version}`);
+  const v1 = data.version === 1;
 
   // The world: regenerate it and make sure it is the same baseline.
   const w = data.world;
@@ -264,16 +276,30 @@ function restore(data, radius, makeWorld) {
   const enemies = restoreEnemies(data.enemies, world.enemySpawns ?? [], world);
   if (!enemies.ok) return fail(enemies.error);
 
+  // A version 1 tally (before G03) has no stride or cards yet: count from 0.
+  const expedition = isPlain(data.expedition) && isPlain(data.expedition.tally) && v1
+    ? { ...data.expedition, tally: { stride: 0, cards: 0, ...data.expedition.tally } }
+    : data.expedition;
+
   // The rest is checked here.
   const problem = playerProblem(data.player, world)
     ?? progressProblem(data.progress, turn)
-    ?? (isPlain(data.progress) ? expeditionProblem(data.expedition, { turn, known: memory.memory.knownCount, history: data.progress.history }) : null)
+    ?? (isPlain(data.progress) ? expeditionProblem(expedition, { turn, known: memory.memory.knownCount, history: data.progress.history }) : null)
     ?? logProblem(data.log);
   if (problem) return fail(problem);
   if (!isInt(data.sight, 0, MAX_SIGHT)) return fail('sight radius is impossible');
   const pos = data.player.position;
   if (enemies.enemies.at(pos)) return fail('an enemy stands on the player');
-  if (data.expedition.status === 'ended' && !hexEquals(pos, world.sanctuary)) return fail('between expeditions the player must be at the sanctuary');
+  if (expedition.status === 'ended' && !hexEquals(pos, world.sanctuary)) return fail('between expeditions the player must be at the sanctuary');
+
+  // The movement deck (G03): it must belong to this expedition.
+  let deck = null;
+  if (!v1) {
+    const restored = restoreDeck(data.deck, world.seedNumber >>> 0);
+    if (!restored.ok) return fail(restored.error);
+    if (restored.deck.expedition !== expedition.number) return fail('the movement deck belongs to another expedition');
+    deck = restored.deck;
+  }
 
   // Everything checks out: build the game (core/game.js createGame's shape).
   const inv = data.player.inventory;
@@ -287,9 +313,13 @@ function restore(data, radius, makeWorld) {
   player.health = data.player.health;
   const game = {
     world, player, memory: memory.memory, changes: changes.changes, journal: journal.journal, clock: clock.clock,
-    log: clone(data.log), enemies: enemies.enemies, progress: clone(data.progress), expedition: clone(data.expedition),
+    log: clone(data.log), enemies: enemies.enemies, progress: clone(data.progress), expedition: clone(expedition), deck,
   };
+  // A version 1 save (before G03): a fresh deck for the current expedition.
+  if (v1) game.deck = createExpeditionDeck(game, expedition.number);
   game.memory.showSight(player.position, data.sight);
+  // A version 1 map (before walked ground, G01) loads with nothing walked but where the player stands.
+  if (memory.version === 1) game.memory.markWalked(player.position);
   return { ok: true, game, savedAt: typeof data.savedAt === 'string' ? data.savedAt : null };
 }
 

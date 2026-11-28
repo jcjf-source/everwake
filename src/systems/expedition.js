@@ -29,7 +29,8 @@
  * used places), fallen enemies (they stay fallen), the clock, insight and
  * upgrades. Setting out (`beginExpedition`) resets the rest: a fresh player
  * at the sanctuary at full health (with the Survivor bonus), the pack as
- * above, and every surviving enemy back home, healed and unaware.
+ * above, a fresh movement deck (G03), and every surviving enemy back home,
+ * healed and unaware.
  *
  * Simulation only (no DOM).
  */
@@ -42,14 +43,26 @@ import { createInventory, addItem, countOf, equip, equippedIn } from './inventor
 import { inSanctuaryWard } from './enemies.js';
 import { discoverIn } from './pois.js';
 import { insightFor } from './progression.js';
+import { createDeck } from './movementDeck.js';
 
-/** The player's sight radius: the base plus Cartographer. */
-export const sightRadiusOf = (game) => SIGHT_RADIUS + effectsOf(game).sight;
+/** The player's sight radius: the base plus Cartographer, plus today's Scout bonus (G03). */
+export const sightRadiusOf = (game) => SIGHT_RADIUS + effectsOf(game).sight + (game.deck?.sightBonus() ?? 0);
+
+/**
+ * The movement deck an expedition sets out with (G03): the starting deck,
+ * shuffled for this world and expedition, with day 1's hand drawn and an
+ * empty stride pool. (Nights and later days come in G05.)
+ */
+export function createExpeditionDeck(game, number) {
+  const deck = createDeck({ seedNumber: (game.world.seedNumber ?? 0) >>> 0, expedition: number });
+  deck.drawHand(1);
+  return deck;
+}
 
 /** The player's maximum health at the start of an expedition: the base plus Survivor. */
 export const maxHealthOf = (game) => PLAYER_BASE.maxHealth + effectsOf(game).maxHealth;
 
-const emptyTally = () => ({ steps: 0, farthest: 0, gathered: {}, found: {}, defeated: {}, places: 0, explored: 0 });
+const emptyTally = () => ({ steps: 0, farthest: 0, gathered: {}, found: {}, defeated: {}, places: 0, explored: 0, stride: 0, cards: 0 });
 
 /** A new active expedition starting now (after the start's sight has been observed). */
 export function createExpedition(game, number) {
@@ -70,7 +83,7 @@ export function summarize(game) {
     number: x.number, startTurn: x.startTurn, endTurn: game.clock.turn, turns: game.clock.turn - x.startTurn,
     steps: t.steps, farthest: t.farthest, mapped,
     gathered: { ...t.gathered }, found: { ...t.found }, defeated: { ...t.defeated },
-    places: t.places, explored: t.explored,
+    places: t.places, explored: t.explored, stride: t.stride, cards: t.cards,
   };
   summary.insight = insightFor(summary);
   return summary;
@@ -100,13 +113,14 @@ export function returnHome(game) {
  * logging). A `returned` or `defeated` event finishes the expedition; the
  * finished report is returned, else null.
  * @param {object} game
- * @param {{ action: object, events: object[] }} turn
+ * @param {{ action: object, events: object[], stride?: number }} turn `stride`: stride it spent
  */
-export function recordTurn(game, { action, events }) {
+export function recordTurn(game, { action, events, stride = 0 }) {
   if (!isActive(game)) return null;
   const t = game.expedition.tally;
   const home = game.world.sanctuary;
   if (action.type === 'move' || action.type === 'flee') t.steps += 1;
+  t.stride += stride;
   t.farthest = Math.max(t.farthest, hexDistance(game.player.position, home));
   let ending = null;
   for (const e of events) {
@@ -117,6 +131,7 @@ export function recordTurn(game, { action, events }) {
       case 'enemyDefeated': add(t.defeated, e.enemy, 1); addBundle(t.found, e.loot); break;
       case 'defeated': t.farthest = Math.max(t.farthest, hexDistance(e.at, home)); ending = e; break;
       case 'returned': ending = e; break;
+      case 'cardPlayed': t.cards += 1; break;
       default: break;
     }
   }
@@ -184,6 +199,7 @@ export function beginExpedition(game) {
   const inventory = last?.outcome === 'returned' ? resupply(game.player.inventory) : createInventory(STARTING_KIT);
   game.player = createPlayer(game.world.sanctuary, { maxHealth: maxHealthOf(game), inventory });
   game.enemies.reset();
+  game.deck = createExpeditionDeck(game, number);
   const found = discoverIn(game, game.memory.observe(game.player.position, sightRadiusOf(game)).newly);
   game.expedition = createExpedition(game, number);
   return [{ type: 'setOut', number, maxHealth: game.player.maxHealth, sight: sightRadiusOf(game) }, ...found];

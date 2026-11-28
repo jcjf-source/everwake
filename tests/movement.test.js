@@ -190,8 +190,8 @@ test('movement readout text', () => {
   const forest = text.placeLabel(hex(3, -2), TERRAIN.forest, sanctuary);
   assert.equal(forest, 'Forest · q 3, r −2');
   assert.equal(text.placeLabel(hex(0, 0), TERRAIN.grassland, sanctuary), 'Sanctuary · q 0, r 0');
-  assert.equal(text.describePreview(forest, 5, 7), 'Route to Forest · q 3, r −2 · 5 steps, terrain cost 7 · tap it again to travel');
-  assert.equal(text.describePreview(forest, 1, 2), 'Route to Forest · q 3, r −2 · 1 step, terrain cost 2 · tap it again to travel');
+  assert.equal(text.describePreview(forest, 5, 7), 'Route to Forest · q 3, r −2 · 5 steps, route cost 7 · tap it again to travel');
+  assert.equal(text.describePreview(forest, 1, 2), 'Route to Forest · q 3, r −2 · 1 step, route cost 2 · tap it again to travel');
   assert.equal(text.describeTravelling(forest, 2, 5), 'Travelling to Forest · q 3, r −2 · step 2 of 5 · tap to stop');
   assert.equal(text.describeArrived(forest, 5), 'Arrived at Forest · q 3, r −2 · 5 steps');
   assert.equal(text.describeStopped(forest, 2, 5), 'Stopped after 2 of 5 steps · tap Forest · q 3, r −2 again to continue');

@@ -20,6 +20,8 @@ import { rollLoot } from '../src/world/enemyPlacement.js';
 import { contextOptions, buttonFor, actionFor } from '../src/ui/contextActions.js';
 import { describeEvent } from '../src/ui/clockText.js';
 import * as X from '../src/ui/expeditionText.js';
+import { giveStride } from './helpers/stride.js';
+import { HAND_SIZE } from '../src/data/deckTuning.js';
 import { asciiGame } from './helpers/asciiMap.js';
 
 // An open field, 24 wide. S (the sanctuary) at the west end.
@@ -175,6 +177,8 @@ test('setting out after a return keeps the pack, resupplies the basics, and rese
   assert.equal(countOf(game.player.inventory, 'healingPotion'), 1);
   assert.deepEqual(summarize(game).steps, 0, 'a fresh tally');
   assert.deepEqual([setOut(game).ok, setOut(game).reason], [false, 'onExpedition'], 'one expedition at a time');
+  assert.deepEqual([game.deck.expedition, game.deck.pool(), game.deck.hand().length], [2, 0, HAND_SIZE], 'a fresh movement deck (G03)');
+  giveStride(game);
   // And the second expedition can be completed too.
   walkTo(turns, game, 2);
   walkTo(turns, game, 0);
@@ -300,6 +304,7 @@ function withUpgrades(levels, rows = FIELD) {
   s.game.progress.insight = 10000;
   for (const [id, n] of Object.entries(levels)) for (let i = 0; i < n; i++) assert.ok(buyUpgrade(s.game, id).ok);
   setOut(s.game);
+  giveStride(s.game);
   return s;
 }
 

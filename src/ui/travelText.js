@@ -21,7 +21,7 @@ export function placeLabel(h, terrain, sanctuary) {
 }
 
 export const describePreview = (label, steps, cost) =>
-  `Route to ${label} · ${plural(steps, 'step', 'steps')}, terrain cost ${cost} · tap it again to travel`;
+  `Route to ${label} · ${plural(steps, 'step', 'steps')}, route cost ${cost} · tap it again to travel`;
 
 export const describeImpassable = (label) => `${label} · impassable, no way through`;
 

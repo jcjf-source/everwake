@@ -11,7 +11,7 @@ Check that the loop gives the intended "turn back or push on" tension, and tune 
   - a cautious player is rarely defeated; a greedy one sometimes is;
   - card finds make about 1 day in 4 noticeably longer at the frontier.
 - **Tune only values** (stride per card, hand size, action costs, find chance, ambush odds, threat steps, hunger penalty). Don't change rules in this task. If a rule needs to change, write it up as a proposal.
-- **Manual playtest:** at least three full expeditions in the browser on desktop and phone sizes. Write down where it felt good and where it felt bad.
+- **Manual playtest:** at least three full expeditions in the browser on desktop and portrait phone sizes (landscape phone is left to Task 14, README decision 13). Write down where it felt good and where it felt bad.
 - Record the final values and the reasons for them in `docs/TECHNICAL.md`. Answer or close each open question in `EXPEDITION_DECK.md` §9 and change its status to **Built**.
 
 ## Acceptance

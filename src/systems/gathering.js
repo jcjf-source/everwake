@@ -92,13 +92,13 @@ export function gatherOptions(game) {
  * @returns {{ destination: Hex, path: Hex[], cost: number } | null} null: no
  *   way to get next to it.
  */
-export function planApproach(world, from, target, { knows = null } = {}) {
+export function planApproach(world, from, target, { knows = null, stepCost = null } = {}) {
   let best = null;
   for (let i = 0; i < DIRECTIONS.length; i++) {
     const n = hexNeighbor(target, i);
     if (!world.isWalkable(n) || (knows && !knows(n))) continue;
     if (hexDistance(n, from) === 0) return { destination: n, path: [], cost: 0 };
-    const r = planRoute(world, from, n, { knows });
+    const r = planRoute(world, from, n, { knows, stepCost });
     if (r.status !== 'ok') continue;
     if (!best || r.cost < best.cost || (r.cost === best.cost && r.path.length < best.path.length)) {
       best = { destination: n, path: r.path, cost: r.cost };

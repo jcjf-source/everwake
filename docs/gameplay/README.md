@@ -36,6 +36,7 @@ These settle the proposal's open questions (§9) and the gaps found when the pro
 10. **Shallow water with Wade:** "normal cost" means shallow water costs **1** (as if it were grassland) while that stride lasts. The ×2 new-ground rule still applies on top.
 11. **The arena** is a **radius-3 hex** area (37 hexes) around the place where the battle started, not a 7×7 block, because the map is a hex grid.
 12. **Saving mid-battle and mid-day:** as in Task 13, everything in the game object is saved. A reload resumes the same hand, pool and battle.
+13. **Phone support during these tasks:** desktop and portrait phone (390×844) are full targets: layouts fit, touch targets are comfortable, and the browser check asserts both. Landscape phone (844×390) only has to **not break**: nothing overlaps the map's focus or the context row in a way that blocks play, and every control can be reached (scrolling inside a panel is fine). Compact landscape layouts are left to Task 14. The browser check still runs all four viewports, but on 844×390 it only checks overlap and reachability, not layout details.
 
 ## Notes for every task
 - Keep the simulation pure and seeded. Shuffles and rolls use `src/core/rng.js` / `hashInts` with seeds from (world seed, expedition, day), never `Math.random()`.

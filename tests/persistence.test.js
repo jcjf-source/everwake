@@ -7,7 +7,8 @@ import { createCombatReactions } from '../src/systems/combat.js';
 import { nodeState } from '../src/systems/gathering.js';
 import { poiState } from '../src/systems/pois.js';
 import { buyUpgrade } from '../src/systems/progression.js';
-import { sightRadiusOf } from '../src/systems/expedition.js';
+import { sightRadiusOf, createExpeditionDeck } from '../src/systems/expedition.js';
+import { HAND_SIZE } from '../src/data/deckTuning.js';
 import { createMapMemory, FOG } from '../src/world/mapMemory.js';
 import { restoreEnemies } from '../src/systems/enemies.js';
 import {
@@ -17,6 +18,7 @@ import {
   SAVE_KEY, DAMAGED_KEY, openStorage, readSave, writeSave, setAsideDamaged, exportText, exportFileName,
 } from '../src/systems/saveSlot.js';
 import * as S from '../src/ui/saveText.js';
+import { giveStride } from './helpers/stride.js';
 
 const R = 40;
 const SEED = 'everwake';
@@ -34,7 +36,7 @@ const roundTrip = (game) => {
   assert.ok(r.ok, r.error);
   return r.game;
 };
-const newGame = (seed = SEED) => createGame(worldFor(seed));
+const newGame = (seed = SEED) => giveStride(createGame(worldFor(seed)));
 const turnsFor = () => createTurnSystem({ reactions: createCombatReactions() });
 
 /** In-memory Web Storage stand-in. */
@@ -320,12 +322,13 @@ test('restoreGame never throws and never changes its input, whatever it is given
       const frozen = JSON.stringify(d);
       const r = restoreGame(d, opts);
       assert.equal(typeof r.ok, 'boolean');
-      const valid = key === 'savedAt' || (key === 'log' && Array.isArray(v)); // any savedAt; an empty log
+      // any savedAt; an empty log; sight 7 (within Cartographer plus Scout, G03)
+      const valid = key === 'savedAt' || (key === 'log' && Array.isArray(v)) || (key === 'sight' && v === 7);
       if (!valid) assert.equal(r.ok, false, `${key} = ${JSON.stringify(v)}`);
       assert.equal(JSON.stringify(d), frozen, 'input unchanged');
     }
   }
-  for (const part of ['player', 'expedition', 'progress', 'world']) {
+  for (const part of ['player', 'expedition', 'progress', 'world', 'memory', 'deck']) {
     for (const key of Object.keys(data[part])) {
       for (const v of values) {
         const d = JSON.parse(base);
@@ -335,6 +338,149 @@ test('restoreGame never throws and never changes its input, whatever it is given
       }
     }
   }
+});
+
+// ---------------------------------------------------------------- walked ground (G01)
+
+const walkedKeys = (game) => game.memory.walkedHexes().map((h) => `${h.q},${h.r}`);
+
+test('walked ground persists across a flee, a defeat, setting out, a return and reloads', () => {
+  const game = newGame();
+  const turns = turnsFor();
+  const home = game.world.sanctuary;
+  wander(turns, game, 4);
+  const trail = walkedKeys(game);
+  assert.equal(trail.length, 5, 'the sanctuary and four steps');
+  assert.deepEqual(walkedKeys(roundTrip(game)), trail, 'reload mid-expedition');
+
+  // Flee: the hex fled to is walked.
+  const wolf = game.enemies.list.find((x) => x.type === 'wolf');
+  const beside = hexNeighbors(game.player.position).find((h) => game.world.isWalkable(h) && !game.enemies.at(h) && !game.memory.isWalked(h));
+  game.enemies.moveTo(wolf, beside);
+  wolf.mode = 'hunting';
+  game.player.health = game.player.maxHealth;
+  const fled = turns.perform(game, { type: 'flee' });
+  assert.ok(fled.ok, fled.reason);
+  const at = game.player.position;
+  assert.ok(game.memory.isWalked(at), 'fled-to hex walked');
+  assert.equal(game.memory.walkedCount(), trail.length + (trail.includes(`${at.q},${at.r}`) ? 0 : 1));
+
+  // Defeat: carried home; nothing walked is forgotten.
+  const before = walkedKeys(game);
+  game.enemies.moveTo(wolf, hexNeighbors(at).find((h) => game.world.isWalkable(h) && !game.enemies.at(h)));
+  wolf.mode = 'hunting';
+  game.player.health = 1;
+  assert.equal(turns.perform(game, { type: 'wait' }).ended?.outcome, 'defeated');
+  assert.deepEqual(game.player.position, home);
+  assert.deepEqual(walkedKeys(game), before, 'the sanctuary was already walked; nothing lost');
+  assert.deepEqual(walkedKeys(roundTrip(game)), before, 'reload between expeditions');
+
+  // Set out again, walk, and return.
+  assert.ok(setOut(game).ok);
+  assert.deepEqual(walkedKeys(game), before, 'setting out keeps walked ground');
+  wander(turns, game, 1);
+  game.player.position = { ...home };
+  assert.equal(turns.perform(game, { type: 'return' }).ended?.outcome, 'returned');
+  const after = walkedKeys(game);
+  assert.ok(after.length >= before.length && before.every((k) => after.includes(k)));
+  const copy = roundTrip(game);
+  assert.deepEqual(walkedKeys(copy), after);
+  assert.equal(text(copy), text(game));
+
+  // A new world starts with only its sanctuary walked.
+  assert.deepEqual(walkedKeys(newGame('another-1')), [`${worldFor('another-1').sanctuary.q},${worldFor('another-1').sanctuary.r}`]);
+});
+
+test('an old save (map memory version 1) loads: nothing walked but where the player stands', () => {
+  const { game } = busyGame();
+  const data = JSON.parse(text(game));
+  data.memory = { version: 1, radius: data.memory.radius, known: data.memory.known };
+  const r = restoreGame(data, opts);
+  assert.ok(r.ok, r.error);
+  const p = game.player.position;
+  assert.deepEqual(walkedKeys(r.game), [`${p.q},${p.r}`]);
+  assert.equal(r.game.memory.knownCount, game.memory.knownCount);
+  assert.equal(r.game.memory.serialize().version, 2, 'saved again in the new form');
+  // It plays on and saves in the new form.
+  const step = hexNeighbors(p).find((h) => r.game.world.isWalkable(h) && !r.game.enemies.at(h));
+  assert.ok(turnsFor().perform(r.game, { type: 'move', to: step }).ok);
+  assert.ok(r.game.memory.isWalked(step));
+  assert.ok(restoreGame(serializeGame(r.game), opts).ok);
+});
+
+test('malformed walked ground is refused', () => {
+  const { game } = busyGame();
+  rejects(game, (d) => { d.memory.walked = d.memory.walked.slice(4); }, /walked ground/);
+  rejects(game, (d) => { d.memory.walked = '%%%'; }, /walked ground/);
+  rejects(game, (d) => { delete d.memory.walked; }, /walked ground/);
+  // A walked hex that is not known: walk every hex.
+  rejects(game, (d) => { d.memory.walked = btoa(String.fromCharCode(...atob(d.memory.walked).split('').map(() => 255))); }, /not on the map/);
+});
+
+// ---------------------------------------------------------------- the movement deck (G03)
+
+test('the movement deck round-trips: piles, hand, pool and its card effects, day effects; play goes on identically', () => {
+  const game = createGame(worldFor(SEED)); // the real deck, no extra stride
+  const turns = turnsFor();
+  const climb = game.deck.hand().indexOf('climb');
+  for (const i of [climb >= 0 ? climb : 0, 0]) assert.ok(turns.perform(game, { type: 'playCard', index: i }).ok);
+  wander(turns, game, 3);
+  game.deck.addFreeGathers(1);
+  game.deck.addSightBonus(2);
+  const copy = roundTrip(game);
+  assert.deepEqual(copy.deck.serialize(), game.deck.serialize());
+  assert.deepEqual(copy.deck.portions(), game.deck.portions(), 'each portion keeps its card effect');
+  assert.equal(sightRadiusOf(copy), sightRadiusOf(game));
+  assert.equal(text(copy), text(game));
+  assert.ok(game.expedition.tally.stride > 0 && game.expedition.tally.cards === 2, 'the tally carries stride and cards');
+  // The same future: the next card, steps, and the draws after them.
+  for (const g of [game, copy]) {
+    assert.ok(turns.perform(g, { type: 'playCard', index: 0 }).ok);
+    wander(turns, g, 2);
+    g.deck.drawHand(2);
+  }
+  assert.equal(text(copy), text(game));
+});
+
+test('a version 1 save (before G03) loads with a fresh deck for its expedition and an uncounted tally', () => {
+  const { game } = busyGame();
+  const data = JSON.parse(text(game));
+  data.version = 1;
+  delete data.deck;
+  delete data.expedition.tally.stride;
+  delete data.expedition.tally.cards;
+  const r = restoreGame(data, opts);
+  assert.ok(r.ok, r.error);
+  const d = r.game.deck;
+  assert.deepEqual([d.expedition, d.pool(), d.hand().length], [game.expedition.number, 0, HAND_SIZE]);
+  assert.deepEqual(d.serialize(), createExpeditionDeck(r.game, game.expedition.number).serialize());
+  assert.deepEqual([r.game.expedition.tally.stride, r.game.expedition.tally.cards], [0, 0]);
+  const again = save(r.game);
+  assert.equal(again.version, SAVE_VERSION);
+  assert.ok(restoreGame(JSON.parse(JSON.stringify(again)), opts).ok, 'saved again in the new form');
+  // A report filed before G03 has no stride or cards, and still loads.
+  const ended = newGame();
+  const t = turnsFor();
+  wander(t, ended, 1);
+  t.perform(ended, { type: 'move', to: ended.world.sanctuary });
+  assert.ok(t.perform(ended, { type: 'return' }).ok);
+  const old = JSON.parse(text(ended));
+  old.version = 1;
+  delete old.deck;
+  delete old.progress.history[0].stride;
+  delete old.progress.history[0].cards;
+  assert.ok(restoreGame(old, opts).ok);
+});
+
+test('a bad movement deck is refused', () => {
+  const game = newGame();
+  rejects(game, (d) => { delete d.deck; }, /deck save is not an object/);
+  rejects(game, (d) => { d.deck.expedition = 2; }, /another expedition/);
+  rejects(game, (d) => { d.deck.hand.push('nope'); }, /unknown card nope/);
+  rejects(game, (d) => { d.deck.pool = [['walk', 0]]; }, /stride must be/);
+  rejects(game, (d) => { d.deck.sight = 9; }, /sight bonus/);
+  rejects(game, (d) => { d.expedition.tally.stride = -1; }, /tally stride/);
+  rejects(game, (d) => { delete d.expedition.tally.cards; }, /tally cards/);
 });
 
 test('restoreEnemies rebuilds positions, health, modes and the hex index from the spawns', () => {

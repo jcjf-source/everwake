@@ -44,12 +44,14 @@ import { planApproach } from '../systems/gathering.js';
  *
  * @param {{ position: Hex, preview: RoutePreview | null, travelling: Hex | null,
  *   travelTarget?: Hex | null, knows?: (h: Hex) => boolean,
- *   nodeAt?: (h: Hex) => unknown, enemyAt?: (h: Hex) => unknown }} state
+ *   nodeAt?: (h: Hex) => unknown, enemyAt?: (h: Hex) => unknown,
+ *   stepCost?: (h: Hex) => number }} state
  *   `travelling` is the current destination while a route is being walked,
  *   and `travelTarget` the node it goes next to, if any;
  *   `knows` is map memory's isKnown (omitted: everything is mapped);
  *   `nodeAt` is truthy for a mapped hex with a node that still has gathers;
- *   `enemyAt` is truthy for a hex with an enemy the player can see.
+ *   `enemyAt` is truthy for a hex with an enemy the player can see;
+ *   `stepCost` weights routes (systems/stride.js planningCost; omitted: terrain cost).
  * @param {Hex | null} tapped the map hex under the tap, or null if off the map
  * @returns {{ stop: boolean, action: TapAction | null }} `stop`: stop travel
  *   first; `action`: what to do next (null: nothing more).
@@ -64,7 +66,7 @@ export function decideTap(world, state, tapped) {
   return { stop: false, action: idleTap(world, state, tapped) };
 }
 
-function idleTap(world, { position, preview, knows = null, nodeAt = null, enemyAt = null }, tapped) {
+function idleTap(world, { position, preview, knows = null, nodeAt = null, enemyAt = null, stepCost = null }, tapped) {
   if (!tapped || !world.has(tapped)) return { kind: 'clear' };
   if (hexEquals(tapped, position)) return { kind: 'here' };
   if (knows && !knows(tapped)) return { kind: 'unexplored', at: tapped };
@@ -72,7 +74,7 @@ function idleTap(world, { position, preview, knows = null, nodeAt = null, enemyA
   // A node on a hex nobody can stand on is gathered from next to it.
   if (nodeAt && !world.isWalkable(tapped) && nodeAt(tapped)) {
     if (hexDistance(tapped, position) === 1) return { kind: 'node', at: tapped };
-    const near = planApproach(world, position, tapped, { knows });
+    const near = planApproach(world, position, tapped, { knows, stepCost });
     if (!near) return { kind: 'blocked', at: tapped };
     const next = { destination: near.destination, target: tapped, path: near.path, cost: near.cost };
     const confirm = preview && preview.target && hexEquals(preview.target, tapped);
@@ -81,7 +83,7 @@ function idleTap(world, { position, preview, knows = null, nodeAt = null, enemyA
   if (hexDistance(tapped, position) === 1) {
     return world.isWalkable(tapped) ? { kind: 'step', to: tapped } : { kind: 'impassable', at: tapped };
   }
-  const route = planRoute(world, position, tapped, { knows, avoid: enemyAt });
+  const route = planRoute(world, position, tapped, { knows, avoid: enemyAt, stepCost });
   if (route.status === 'impassable') return { kind: 'impassable', at: tapped };
   if (route.status !== 'ok') return { kind: 'unreachable', at: tapped };
   const next = { destination: tapped, path: route.path, cost: route.cost };
